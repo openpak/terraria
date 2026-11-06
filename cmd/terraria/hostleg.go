@@ -1,0 +1,165 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"log"
+	"net"
+	"net/netip"
+	"time"
+
+	"github.com/openpak/terraria/internal/pia"
+)
+
+// hostLeg answers a Wii U's station handshake as the host it thinks it is joining (relay leg W, prds#145): ack its connection
+// request, send the inverse request, ack its connection response and answer with ours. Everything it sends is captured.
+type hostLeg struct {
+	conn  net.PacketConn
+	key   []byte
+	pid   uint32
+	self  netip.AddrPort
+	enc   *json.Encoder
+	start time.Time
+	ours  map[string]uint32 // peer -> ack id of our inverse request
+	done  map[string]bool   // peer -> our response sent
+	info  map[string]*pia.ConnRequest
+	conn1 map[string]uint8  // peer -> connection id it uses once connected (packet header)
+	pkt   map[string]uint16 // peer -> our next packet id
+}
+
+func newHostLeg(conn net.PacketConn, key []byte, pid uint32, self netip.AddrPort, enc *json.Encoder) *hostLeg {
+	return &hostLeg{conn: conn, key: key, pid: pid, self: self, enc: enc, start: time.Now(), ours: map[string]uint32{}, done: map[string]bool{}, info: map[string]*pia.ConnRequest{}, conn1: map[string]uint8{}, pkt: map[string]uint16{}}
+}
+
+func rnd32() uint32 {
+	var b [4]byte
+	rand.Read(b[:])
+	return binary.BigEndian.Uint32(b[:])
+}
+
+func (h *hostLeg) location(natType uint8) pia.StationLocation {
+	return pia.StationLocation{Addr: h.self, PID: h.pid, RVCID: 1, URLType: 1, SID: 0x0f, NATMapping: 1, NATFilter: 2, NATType: natType}
+}
+
+func (h *hostLeg) send(to net.Addr, theirTimer uint16, payloads ...[]byte) {
+	h.sendProto(to, theirTimer, pia.ProtoStation, 0xfd, payloads...)
+}
+
+func (h *hostLeg) sendProto(to net.Addr, theirTimer uint16, proto uint16, src uint8, payloads ...[]byte) {
+	var msgs []pia.Message
+	for _, p := range payloads {
+		msgs = append(msgs, pia.Message{SrcStation: src, Protocol: proto, Payload: p})
+	}
+	h.sendMsgs(to, theirTimer, msgs)
+}
+
+// sendMsgs sends messages; once the peer uses a connection id, packets carry it and a rising packet id.
+func (h *hostLeg) sendMsgs(to net.Addr, theirTimer uint16, msgs []pia.Message) {
+	hdr := pia.Header{Connection: 1, SrcTimer: uint16(time.Since(h.start).Milliseconds()), DstTimer: theirTimer}
+	if c, ok := h.conn1[to.String()]; ok {
+		h.pkt[to.String()]++
+		if h.pkt[to.String()] == 0 {
+			h.pkt[to.String()] = 1
+		}
+		hdr.Connection, hdr.PacketID = c, h.pkt[to.String()]
+	}
+	raw, err := pia.Encode(hdr, msgs, h.key)
+	if err != nil {
+		log.Printf("host leg: encode: %v", err)
+		return
+	}
+	if _, err := h.conn.WriteTo(raw, to); err != nil {
+		log.Printf("host leg: send: %v", err)
+	}
+	r := capture(raw, h.key)
+	r.From, r.Dir = to.String(), "out"
+	h.enc.Encode(r)
+}
+
+func (h *hostLeg) handle(b []byte, from net.Addr) {
+	p, err := pia.Decode(b, h.key)
+	if err != nil {
+		return
+	}
+	peer := from.String()
+	if p.Connection > 1 {
+		h.conn1[peer] = p.Connection
+	}
+	for _, m := range p.Messages {
+		// connected-station message: we are station 0 (host), the joiner station 1 (destination bitmap 0x2)
+		reply := func(proto uint16, port uint16, payload []byte) {
+			h.sendMsgs(from, p.SrcTimer, []pia.Message{{SrcStation: 0, Destination: 0x2, SrcConstant: 1, Protocol: proto, Port: port, Payload: payload}})
+		}
+		switch m.Protocol {
+		case pia.ProtoRTT:
+			if len(m.Payload) >= 16 && m.Payload[3] == 0 {
+				out := append([]byte(nil), m.Payload[:16]...)
+				out[3] = 1 // response, same system time
+				reply(pia.ProtoRTT, m.Port, out)
+			}
+			continue
+		case pia.ProtoSessionClk:
+			if len(m.Payload) >= 16 {
+				out := append([]byte(nil), m.Payload[:8]...)
+				out = binary.BigEndian.AppendUint64(out, uint64(time.Since(h.start).Milliseconds()))
+				reply(pia.ProtoSessionClk, m.Port, out)
+			}
+			continue
+		}
+		if m.Protocol == pia.ProtoSession {
+			if j, ok := pia.ParseJoinRequest(m.Payload); ok {
+				req := h.info[peer]
+				if req == nil {
+					log.Printf("host leg: %s join request before a station connection", peer)
+					continue
+				}
+				log.Printf("host leg: %s mesh join request (ack %08x) -> join response, host 0, joiner 1", peer, j.AckID)
+				h.sendProto(from, p.SrcTimer, pia.ProtoSession, 0, pia.JoinResponse(0, 1, []pia.MeshStation{
+					{Public: h.location(3), Private: h.location(0), Index: 0},
+					{Public: req.Public, Private: req.Private, Index: 1},
+				}, j.AckID))
+				continue
+			}
+		}
+		if m.Protocol != pia.ProtoStation {
+			log.Printf("host leg: %s %s port %d %dB (not answered)", peer, pia.ProtoName(m.Protocol), m.Port, len(m.Payload))
+			continue
+		}
+		s, err := pia.ParseStation(m.Payload)
+		if err != nil {
+			log.Printf("host leg: %s station: %v", peer, err)
+			continue
+		}
+		switch {
+		case s.Request != nil && !s.Request.Inverse:
+			ack := pia.AckMessage(s.Request.AckID)
+			if _, sent := h.ours[peer]; sent {
+				h.send(from, p.SrcTimer, ack) // a resend: ack again, the inverse request is already out
+				continue
+			}
+			inv := pia.ConnRequest{ConnID: s.Request.ConnID, Version: s.Request.Version, Inverse: true,
+				Public: h.location(3), Private: h.location(0), AckID: rnd32()}
+			h.ours[peer] = inv.AckID
+			h.info[peer] = s.Request
+			log.Printf("host leg: %s connection request (conn %d, station version %d, PID %d) -> ack + inverse request", peer,
+				s.Request.ConnID, s.Request.Version, s.Request.Public.PID)
+			h.send(from, p.SrcTimer, ack, inv.Marshal())
+		case s.Type == pia.StationAck:
+			log.Printf("host leg: %s ack %08x (ours %08x)", peer, s.AckID, h.ours[peer])
+		case s.Response != nil:
+			log.Printf("host leg: %s connection response result %d version %d platform %d token %q player %q", peer,
+				s.Response.Result, s.Response.Version, s.Response.Platform, s.Response.Token, s.Response.Player.Name)
+			msgs := [][]byte{pia.AckMessage(s.Response.AckID)}
+			if !h.done[peer] && s.Response.Result == 0 {
+				h.done[peer] = true
+				msgs = append(msgs, pia.ConnResponse{Version: s.Response.Version, Platform: pia.PlatformWiiU,
+					Token: s.Response.Token, Player: pia.PlayerInfo{Name: "OpenPak relay", Language: s.Response.Player.Language},
+					AckID: rnd32()}.Marshal())
+			}
+			h.send(from, p.SrcTimer, msgs...)
+		default:
+			log.Printf("host leg: %s station type %d", peer, s.Type)
+		}
+	}
+}
