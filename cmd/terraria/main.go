@@ -16,6 +16,13 @@ func main() {
 		}
 		return
 	}
-	fmt.Fprintln(os.Stderr, "usage: terraria probe -listen :49200 -key keyfile -out capture.jsonl")
+	if len(os.Args) > 1 && os.Args[1] == "join" {
+		if err := join(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "join:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	fmt.Fprintln(os.Stderr, "usage: terraria probe|join ...")
 	os.Exit(2)
 }

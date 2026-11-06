@@ -46,3 +46,10 @@ func JoinResponse(hostIndex, joinerIndex uint8, stations []MeshStation, ackID ui
 	}
 	return binary.BigEndian.AppendUint32(b, ackID)
 }
+
+// JoinRequestMessage builds a mesh join request from a joiner that has no station index yet (0xFD).
+func JoinRequestMessage(addr StationLocation, ackID uint32) []byte {
+	b := []byte{MeshJoinReq, 0xfd, 0, 0}
+	b = addr.append(b)[:4+8] // the StationAddress part only: ip, port, extension
+	return binary.BigEndian.AppendUint32(b, ackID)
+}
