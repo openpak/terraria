@@ -2,8 +2,9 @@
 // format "up to 5.4" and the packet header "up to 5.6" documented on github.com/kinnay/NintendoClients/wiki (PIA Protocol).
 //
 // Packet: a 12-byte clear header, then the messages, AES-128-ECB encrypted when the header says so (padded with 0xFF to 16),
-// then HMAC-MD5 over header and (encrypted) body. Key: the first 16 bytes of the NEX MatchmakeSession session key, which the
-// OpenPak NEX server generates. All integers are big-endian.
+// then HMAC-MD5 over header and (encrypted) body. Keys come from the NEX MatchmakeSession session key, which the OpenPak NEX
+// server generates: AES uses its first 16 bytes, the HMAC uses the whole key (confirmed on Terraria Wii U in Quay, 2026-11-06:
+// a 32-byte key signs plain station packets). All integers are big-endian.
 package pia
 
 import (
@@ -150,7 +151,7 @@ func Decode(b, key []byte) (*Packet, error) {
 }
 
 func sign(key, header, body []byte) []byte {
-	m := hmac.New(md5.New, Key(key))
+	m := hmac.New(md5.New, key)
 	m.Write(header)
 	m.Write(body)
 	return m.Sum(nil)

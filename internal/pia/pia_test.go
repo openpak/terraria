@@ -2,6 +2,9 @@ package pia
 
 import (
 	"bytes"
+	"encoding/hex"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -54,4 +57,31 @@ func TestPlainUnsigned(t *testing.T) {
 	if _, err := Decode([]byte("nope nope nope"), nil); err != ErrMagic {
 		t.Fatal("magic")
 	}
+}
+
+// A real station connection request from Terraria (Wii U) in Quay (2026-11-06, prds#145): plain, signed with HMAC-MD5 keyed by the
+// full 32-byte session key. The key is not in the repo; only the layout is checked here.
+func TestRealConnectionRequestLayout(t *testing.T) {
+	raw, err := hex.DecodeString(strings.TrimSpace(string(must(os.ReadFile("testdata/quay-connreq.hex")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Decode(raw[:len(raw)-SigLen], nil) // strip the signature, decode unsigned
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Encrypted || p.Connection != 1 || len(p.Messages) != 1 {
+		t.Fatalf("%+v", p)
+	}
+	m := p.Messages[0]
+	if m.Protocol != ProtoStation || m.SrcStation != 0xfd || len(m.Payload) != 62 || m.Payload[0] != 1 || m.Payload[2] != 3 {
+		t.Fatalf("message %+v", m)
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
