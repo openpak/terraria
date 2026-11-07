@@ -13,15 +13,16 @@ import (
 // our sid [I]; every probe is logged by the caller for live iteration.
 const probeLen = 0x58
 
-// ProbePacket builds a type-1 probe (vsh FUN_001ea168): own skey at +0x04, peer skey at +0x24,
-// own sid at +0x44 and peer sid at +0x46.
+// ProbePacket builds a type-1 probe (vsh FUN_001ea168). The identity fields are peer-first, as in
+// the host's own probes (live capture 2026-11-07): peer skey at +0x04, own skey at +0x24,
+// peer sid at +0x44 and own sid at +0x46.
 func ProbePacket(ownSKey, peerSKey []byte, ownSID, peerSID uint16) []byte {
 	out := make([]byte, probeLen)
 	out[0] = 1
-	copy(out[0x04:0x14], ownSKey)
-	copy(out[0x24:0x34], peerSKey)
-	binary.BigEndian.PutUint16(out[0x44:], ownSID)
-	binary.BigEndian.PutUint16(out[0x46:], peerSID)
+	copy(out[0x04:0x14], peerSKey)
+	copy(out[0x24:0x34], ownSKey)
+	binary.BigEndian.PutUint16(out[0x44:], peerSID)
+	binary.BigEndian.PutUint16(out[0x46:], ownSID)
 	return out
 }
 
