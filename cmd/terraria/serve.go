@@ -61,7 +61,9 @@ func serve() error {
 	}()
 	key := os.Getenv("TERRARIA_INTERNAL_KEY")
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
+	health := func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) }
+	mux.HandleFunc("GET /health", health)
+	mux.HandleFunc("GET /healthz", health) // the website's /healthz/terraria and the status page read this one
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")

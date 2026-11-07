@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.1 - 2026-11-07
+
+`GET /healthz` (the website's `/healthz/terraria` and the status page read it).
+
 ## v0.1.0 - 2026-11-07
 
 First service release (prds#157): `terraria serve` = the cross-play relay's Wii U leg on UDP 22950 (public game transport) and an
