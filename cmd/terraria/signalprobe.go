@@ -57,6 +57,15 @@ func signalprobe() error {
 		HostJID: host + "@" + domain + "/ps3",
 		SelfJID: cl.JID,
 	}
+	// Mirror the host's offer shape: stun, static and (when known) local candidates, so the host's
+	// candidate selection finds a pair it will actually probe.
+	p.OfferCandidates = []rtsig.Candidate{
+		{Type: "stun", Address: pub, Port: 3658},
+		{Type: "static", Address: "0.0.0.0", Port: 3658},
+	}
+	if lip := os.Getenv("TERRARIA_SIGNAL_LOCAL_IP"); lip != "" {
+		p.OfferCandidates = append(p.OfferCandidates, rtsig.Candidate{Type: "local", Address: lip, Port: 3658})
+	}
 	p.Send = func(s string) error {
 		log.Printf("signalprobe: >> %s", s)
 		return cl.Send(s)
@@ -64,7 +73,26 @@ func signalprobe() error {
 	cl.Log = func(s string) { log.Printf("signalprobe: << %s", s) }
 	probed := false
 	var rc *rudp.Conn
-	p.OnProbe = func(c rtsig.Candidate) { log.Printf("signalprobe: host candidate %s:%d, probing", c.Address, c.Port) }
+	p.OnProbe = func(c rtsig.Candidate) {
+		log.Printf("signalprobe: host candidate %s:%d, probing", c.Address, c.Port)
+		// Send our own type-1 probes to every host candidate: the host expects a probe from us
+		// before it answers (observed: it terminates after ~10s when none arrive).
+		go func() {
+			pkt := p.ProbePacketFor()
+			for i := 0; i < 40; i++ {
+				for _, t := range p.ProbeTargets() {
+					dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
+					if dst.IP == nil || dst.Port == 0 {
+						continue
+					}
+					if _, err := udp.WriteToUDP(pkt, dst); err != nil {
+						log.Printf("signalprobe: probe to %s: %v", dst, err)
+					}
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+		}()
+	}
 	p.OnMutual = func(c rtsig.Candidate) {
 		log.Printf("signalprobe: MUTUAL ACTIVATED, host RUDP endpoint %s:%d", c.Address, c.Port)
 		var isn uint16
@@ -96,7 +124,7 @@ func signalprobe() error {
 			pkt := append([]byte(nil), buf[:n]...)
 			if len(pkt) == 0x58 && pkt[0] <= 3 {
 				log.Printf("signalprobe: probe %d bytes from %s type=%d", n, src, pkt[0])
-				if resp := rtsig.ProbeResponse(pkt, sid); resp != nil {
+				if resp := p.ProbeResponseFor(pkt); resp != nil {
 					udp.WriteToUDP(resp, src)
 				}
 				if !probed {

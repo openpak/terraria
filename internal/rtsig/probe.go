@@ -13,6 +13,18 @@ import (
 // our sid [I]; every probe is logged by the caller for live iteration.
 const probeLen = 0x58
 
+// ProbePacket builds a type-1 probe (vsh FUN_001ea168): own skey at +0x04, peer skey at +0x24,
+// own sid at +0x44 and peer sid at +0x46.
+func ProbePacket(ownSKey, peerSKey []byte, ownSID, peerSID uint16) []byte {
+	out := make([]byte, probeLen)
+	out[0] = 1
+	copy(out[0x04:0x14], ownSKey)
+	copy(out[0x24:0x34], peerSKey)
+	binary.BigEndian.PutUint16(out[0x44:], ownSID)
+	binary.BigEndian.PutUint16(out[0x46:], peerSID)
+	return out
+}
+
 // ProbeResponse builds the type-2 answer to a type-1 probe from cand.
 func ProbeResponse(req []byte, ownSID uint16) []byte {
 	if len(req) < probeLen || req[0] != 1 {
@@ -22,6 +34,21 @@ func ProbeResponse(req []byte, ownSID uint16) []byte {
 	out[0] = 2
 	v := binary.BigEndian.Uint32(out[0x50:])
 	binary.BigEndian.PutUint32(out[0x50:], v^uint32(ownSID))
+	return out
+}
+
+// ProbeResponsePacket builds the type-2 answer from our own connection fields (vsh FUN_001ea168):
+// our skey at +0x04, the peer's at +0x24, our sid at +0x44, the peer's at +0x46, the request's
+// +0x48 timestamps echoed, and the +0x50/+0x54 fields XORed with our sid.
+func ProbeResponsePacket(req []byte, ownSKey, peerSKey []byte, ownSID, peerSID uint16) []byte {
+	if len(req) < probeLen || req[0] != 1 {
+		return nil
+	}
+	out := ProbePacket(ownSKey, peerSKey, ownSID, peerSID)
+	out[0] = 2
+	copy(out[0x48:0x50], req[0x48:0x50])
+	binary.BigEndian.PutUint32(out[0x50:], binary.BigEndian.Uint32(req[0x50:])^uint32(ownSID))
+	binary.BigEndian.PutUint16(out[0x54:], binary.BigEndian.Uint16(req[0x54:])^ownSID)
 	return out
 }
 

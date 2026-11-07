@@ -11,6 +11,11 @@ import (
 // stanzas have been exchanged; OnMutual (if set) fires once at that moment.
 type Participant struct {
 	Self     Candidate // the relay endpoint offered to the host (also the RUDP listen endpoint)
+
+	// OfferCandidates, if non-empty, is the candidate list sent in the offer instead of just Self.
+	// Mirror the host: offer stun (public mapped), static and local forms so its candidate selection
+	// finds a pair it will probe.
+	OfferCandidates []Candidate
 	SID      uint16
 	SKey     []byte // 16 bytes, stable for the session
 	HostJID  string
@@ -19,9 +24,10 @@ type Participant struct {
 	OnMutual func(host Candidate)
 	OnProbe  func(host Candidate) // probing should start toward this candidate
 
-	peerSID  uint16
-	peerKey  []byte
-	hostCand Candidate
+	peerSID   uint16
+	peerKey   []byte
+	hostCand  Candidate
+	hostCands []Candidate
 	offerOut bool // own offer sent
 	offAck   bool // host acked own offer
 	peerOff  bool // host offer received
@@ -49,7 +55,11 @@ func (p *Participant) Start() error {
 		return nil
 	}
 	p.offerOut = true
-	return p.send(Offer(p.nextID(), p.HostJID, p.SelfJID, p.SID, p.peerSID, p.SKey, 1, []Candidate{p.Self}))
+	cs := p.OfferCandidates
+	if len(cs) == 0 {
+		cs = []Candidate{p.Self}
+	}
+	return p.send(Offer(p.nextID(), p.HostJID, p.SelfJID, p.SID, p.peerSID, p.SKey, 1, cs))
 }
 
 // ProbeOK reports the UDP probe phase succeeded; the accept can go out.
@@ -62,6 +72,20 @@ func (p *Participant) ProbeOK() error {
 	c.MAddress, c.MPort = c.Address, c.Port
 	return p.send(Accept(p.nextID(), p.HostJID, p.SelfJID, p.SID, p.peerSID, p.SKey, []Candidate{c}))
 }
+
+// ProbePacketFor builds the type-1 probe to send to the host (spec §7): it carries our skey,
+// the host's skey, our sid and the host's sid.
+func (p *Participant) ProbePacketFor() []byte {
+	return ProbePacket(p.SKey, p.peerKey, p.SID, p.peerSID)
+}
+
+// ProbeResponseFor builds the type-2 answer to a host probe from this connection's fields.
+func (p *Participant) ProbeResponseFor(req []byte) []byte {
+	return ProbeResponsePacket(req, p.SKey, p.peerKey, p.SID, p.peerSID)
+}
+
+// ProbeTargets returns every candidate the host offered.
+func (p *Participant) ProbeTargets() []Candidate { return p.hostCands }
 
 func (p *Participant) maybeActivated() error {
 	if p.actOut || !p.accOut || !p.accAck || !p.peerAcc {
@@ -110,6 +134,7 @@ func (p *Participant) Handle(st Stanza) error {
 	switch st.Action {
 	case "offer":
 		p.peerSID, p.peerKey, p.peerOff = st.SID, st.SKey, true
+		p.hostCands = st.Candidates
 		if len(st.Candidates) > 0 {
 			p.hostCand = st.Candidates[0]
 			for _, c := range st.Candidates {
