@@ -29,6 +29,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "signalprobe" {
+		if err := signalprobe(); err != nil {
+			fmt.Fprintln(os.Stderr, "signalprobe:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "join" {
 		if err := join(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "join:", err)
