@@ -100,10 +100,10 @@ func signalprobe() error {
 					if t.Type != "local" {
 						continue
 					}
-					for port := 1024; port <= 8192; port++ {
+					for port := 1; port <= 65535; port++ {
 						udp.WriteToUDP(pkt, &net.UDPAddr{IP: net.ParseIP(t.Address), Port: port})
 					}
-					log.Printf("signalprobe: sprayed probe to %s ports 1024-8192", t.Address)
+					log.Printf("signalprobe: sprayed probe to %s ports 1-65535", t.Address)
 				}
 			}
 			for i := 0; i < 40; i++ {
