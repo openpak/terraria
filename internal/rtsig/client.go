@@ -31,7 +31,17 @@ func DialRT(addr string, useTLS bool, domain string, auth []byte) (*Client, erro
 	var err error
 	if useTLS {
 		d := &net.Dialer{Timeout: 10 * time.Second}
-		conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12})
+		// The RT front is a PS3-era TLS endpoint (old versions and RSA-CBC suites, OpenPak CA):
+		// match what the firmware offers and skip verification for this internal participant.
+		conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{
+			InsecureSkipVerify: true, ServerName: domain,
+			MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS12,
+			CipherSuites: []uint16{
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA, tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256, tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+			},
+		})
 	} else {
 		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}

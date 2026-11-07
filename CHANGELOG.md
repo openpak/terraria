@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.2 - 2026-11-07
+
+`signalprobe`: the RT sign-in now speaks the RT front's PS3-era TLS (TLS 1.0–1.2, RSA-CBC suites, verification skipped for this internal participant). First live exchange: signed in as the joiner account and the hosting PS3 answered with its own udpp2p offer within a second (both forwards logged by np-community).
+
 ## v0.2.1 - 2026-11-07
 
 PS3 relay leg, RUDP: `internal/rudp` implements the cellRudp wire protocol from the librudp decompile (aggregator frames, simultaneous SYN/SYN+ACK open, cumulative-ack data) with the decompile's first-packet bytes as a golden test, and `signalprobe` now starts RUDP toward the host candidate at mutual activation and sends the joiner Terraria Hello on ESTABLISHED, logging every game payload.
