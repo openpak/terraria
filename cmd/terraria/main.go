@@ -9,6 +9,19 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 1 || os.Args[1] == "serve" {
+		if err := serve(); err != nil {
+			fmt.Fprintln(os.Stderr, "terraria:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if os.Args[1] == "healthcheck" {
+		if err := healthcheck(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "probe" {
 		if err := probe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)
@@ -23,6 +36,6 @@ func main() {
 		}
 		return
 	}
-	fmt.Fprintln(os.Stderr, "usage: terraria probe|join ...")
+	fmt.Fprintln(os.Stderr, "usage: terraria [serve]|healthcheck|probe|join ...")
 	os.Exit(2)
 }

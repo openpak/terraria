@@ -1,9 +1,9 @@
-package main
+package relay
 
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/hex"
 	"log"
 	"net"
 	"net/netip"
@@ -21,7 +21,12 @@ type hostLeg struct {
 	key     []byte
 	pid     uint32
 	self    netip.AddrPort
-	enc     *json.Encoder
+	capture func(raw []byte, peer string, out bool) // optional: records every packet
+	// OnGame receives every Terraria message the console sends (the relay forwards it to the other leg).
+	OnGame func(peer string, msg []byte)
+	// Greet makes the leg act as the Terraria host itself (PlayerId, request player info): test mode, no other leg.
+	Greet   bool
+	stats   Stats
 	start   time.Time
 	ours    map[string]uint32 // peer -> ack id of our inverse request
 	done    map[string]bool   // peer -> our response sent
@@ -40,8 +45,11 @@ type relState struct {
 	last              time.Time
 }
 
-func newHostLeg(conn net.PacketConn, key []byte, pid uint32, self netip.AddrPort, enc *json.Encoder) *hostLeg {
-	return &hostLeg{conn: conn, key: key, pid: pid, self: self, enc: enc, start: time.Now(), ours: map[string]uint32{}, done: map[string]bool{}, info: map[string]*pia.ConnRequest{}, conn1: map[string]uint8{}, pkt: map[string]uint16{}, rel: map[string]*relState{}, joinAck: map[string]uint32{}}
+// Stats are a leg's counters.
+type Stats struct{ PacketsIn, PacketsOut, GameIn int64 }
+
+func newHostLeg(conn net.PacketConn, key []byte, pid uint32, self netip.AddrPort, capture func([]byte, string, bool)) *hostLeg {
+	return &hostLeg{conn: conn, key: key, pid: pid, self: self, capture: capture, start: time.Now(), ours: map[string]uint32{}, done: map[string]bool{}, info: map[string]*pia.ConnRequest{}, conn1: map[string]uint8{}, pkt: map[string]uint16{}, rel: map[string]*relState{}, joinAck: map[string]uint32{}}
 }
 
 func rnd32() uint32 {
@@ -84,14 +92,16 @@ func (h *hostLeg) sendMsgs(to net.Addr, theirTimer uint16, msgs []pia.Message) {
 	if _, err := h.conn.WriteTo(raw, to); err != nil {
 		log.Printf("host leg: send: %v", err)
 	}
-	r := capture(raw, h.key)
-	r.From, r.Dir = to.String(), "out"
-	h.enc.Encode(r)
+	h.stats.PacketsOut++
+	if h.capture != nil {
+		h.capture(raw, to.String(), true)
+	}
 }
 
 func (h *hostLeg) handle(b []byte, from net.Addr) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.stats.PacketsIn++
 	p, err := pia.Decode(b, h.key)
 	if err != nil {
 		return
@@ -184,6 +194,9 @@ func (h *hostLeg) handle(b []byte, from net.Addr) {
 				// arrives earlier is acked by PIA and dropped by the game. Greet after a short delay and repeat until Hello.
 				st := h.rel[peer]
 				go func() {
+					if !h.Greet {
+						return
+					}
 					for i := 0; i < 6 && !st.hello; i++ {
 						time.Sleep(2 * time.Second)
 						h.mu.Lock()
@@ -240,11 +253,15 @@ func (h *hostLeg) reliable(from net.Addr, theirTimer uint16, m pia.Message) {
 	}
 	if r.Seq == st.recvNext {
 		st.recvNext++
-		log.Printf("host leg: %s TERRARIA msg type %d (%d bytes): %s", peer, r.Payload[0], len(r.Payload), hexHead(r.Payload, 64))
-		switch r.Payload[0] {
-		case 0x01: // Hello [01][version][slot]: request player info [03][slot], as the host does for a matching version
+		h.stats.GameIn++
+		log.Printf("host leg: %s terraria msg type %d (%d bytes)", peer, r.Payload[0], len(r.Payload))
+		if h.OnGame != nil {
+			h.OnGame(peer, r.Payload)
+		}
+		if r.Payload[0] == 0x01 {
 			st.hello = true
-			if len(r.Payload) >= 3 {
+			if h.Greet && len(r.Payload) >= 3 {
+				// Hello [01][version][slot]: request player info [03][slot], as the host does for a matching version
 				log.Printf("host leg: %s Hello, version %d, slot %d -> request player info", peer, r.Payload[1], r.Payload[2])
 				h.sendGame(from, theirTimer, []byte{0x03, r.Payload[2]})
 			}
@@ -252,4 +269,11 @@ func (h *hostLeg) reliable(from net.Addr, theirTimer uint16, m pia.Message) {
 	}
 	ack := pia.ReliableMsg{Ack: st.recvNext}
 	h.sendMsgs(from, theirTimer, []pia.Message{{SrcStation: 0, Destination: 0x2, SrcConstant: 1, Protocol: pia.ProtoReliable, Port: m.Port, Payload: ack.Marshal()}})
+}
+
+func hexHead(b []byte, n int) string {
+	if len(b) > n {
+		return hex.EncodeToString(b[:n]) + "..."
+	}
+	return hex.EncodeToString(b)
 }

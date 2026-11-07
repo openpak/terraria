@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/openpak/terraria/internal/relay"
 	"log"
 	"net"
 	"net/netip"
@@ -70,13 +73,17 @@ func probe(args []string) error {
 	}
 	log.Printf("probe listening on %s, key loaded: %t", conn.LocalAddr(), key != nil)
 	enc := json.NewEncoder(w)
-	var host *hostLeg
 	if *respond {
+		// host leg in test mode: one leg for the given key, acting as the Terraria host itself
 		ap, err := netip.ParseAddrPort(*self)
 		if err != nil {
 			return fmt.Errorf("-self: %w", err)
 		}
-		host = newHostLeg(conn, key, uint32(*pid), ap, enc)
+		rl := &relay.Relay{Conn: &capturingConn{PacketConn: conn, enc: enc, key: key}, Public: ap, Greet: true}
+		if _, err := rl.Register(context.Background(), relay.LegSpec{CoreSession: "probe", HostPID: uint32(*pid), SessionKey: hex.EncodeToString(key)}); err != nil {
+			return err
+		}
+		return rl.Serve(context.Background())
 	}
 	buf := make([]byte, 2048)
 	for {
@@ -88,9 +95,6 @@ func probe(args []string) error {
 		r.From = from.String()
 		r.Dir = "in"
 		enc.Encode(r)
-		if host != nil {
-			host.handle(buf[:n], from)
-		}
 		summary := r.Err
 		for _, m := range r.Messages {
 			summary += fmt.Sprintf(" [%s port %d %dB]", m.Proto, m.Port, len(m.Payload)/2)
@@ -117,4 +121,28 @@ func capture(b, key []byte) record {
 		}
 	}
 	return r
+}
+
+// capturingConn records every packet read and written (test probe only).
+type capturingConn struct {
+	net.PacketConn
+	enc *json.Encoder
+	key []byte
+}
+
+func (c *capturingConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, from, err := c.PacketConn.ReadFrom(b)
+	if err == nil {
+		r := capture(b[:n], c.key)
+		r.From, r.Dir = from.String(), "in"
+		c.enc.Encode(r)
+	}
+	return n, from, err
+}
+
+func (c *capturingConn) WriteTo(b []byte, to net.Addr) (int, error) {
+	r := capture(b, c.key)
+	r.From, r.Dir = to.String(), "out"
+	c.enc.Encode(r)
+	return c.PacketConn.WriteTo(b, to)
 }

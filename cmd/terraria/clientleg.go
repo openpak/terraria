@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -197,4 +198,10 @@ func hexHead(b []byte, n int) string {
 		return hex.EncodeToString(b[:n]) + "..."
 	}
 	return hex.EncodeToString(b)
+}
+
+func rnd32() uint32 {
+	var b [4]byte
+	rand.Read(b[:])
+	return binary.BigEndian.Uint32(b[:])
 }

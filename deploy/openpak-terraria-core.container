@@ -1,0 +1,25 @@
+# Sample quadlet: copy to ~/.config/containers/systemd/openpak-terraria-core.container.
+# The name is -core because openpak-terraria (Switch NPLN) and openpak-terraria-wiiu (NEX) are taken.
+[Unit]
+Description=OpenPak Terraria service (cross-play relay, compat groups; common/terraria)
+Requires=openpak-postgres.service
+After=openpak-postgres.service
+
+[Container]
+ContainerName=openpak-terraria-core
+Image=ghcr.io/openpak/terraria:latest
+AutoUpdate=registry
+Network=openpak.network
+# internal HTTP (adapters register relay legs), loopback on the host
+PublishPort=127.0.0.1:20260:20260
+# relay game transport, public (consoles dial it)
+PublishPort=22950:22950/udp
+EnvironmentFile=%h/openpak/deploy/.env
+Environment=TERRARIA_HTTP_ADDR=:20260 TERRARIA_RELAY_ADDR=:22950 TERRARIA_RELAY_PUBLIC=145.241.199.19:22950
+HealthCmd=["/terraria","healthcheck"]
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
