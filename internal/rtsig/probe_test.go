@@ -19,7 +19,11 @@ func TestProbePacketLayout(t *testing.T) {
 	if binary.BigEndian.Uint16(pkt[0x44:]) != 0x1234 || binary.BigEndian.Uint16(pkt[0x46:]) != 0x5678 {
 		t.Fatal("sid fields wrong")
 	}
+	binary.BigEndian.PutUint32(pkt[0x50:], 0xDEADBEEF)
 	resp := ProbeResponsePacket(pkt, peer, own, 0x5678, 0x1234)
+	if got := binary.BigEndian.Uint32(resp[0x50:]); got != 0xDEADBEEF^(0x5678<<16|0x1234) {
+		t.Fatalf("response +0x50 = %#x", got)
+	}
 	if resp == nil || resp[0] != 2 {
 		t.Fatal("no type-2 response")
 	}

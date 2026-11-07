@@ -82,7 +82,7 @@ func signalprobe() error {
 			for i := 0; i < 40; i++ {
 				for _, t := range p.ProbeTargets() {
 					dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
-					if dst.IP == nil || dst.Port == 0 {
+					if dst.IP == nil || dst.Port == 0 || dst.IP.IsUnspecified() {
 						continue
 					}
 					if _, err := udp.WriteToUDP(pkt, dst); err != nil {
@@ -123,11 +123,11 @@ func signalprobe() error {
 			}
 			pkt := append([]byte(nil), buf[:n]...)
 			if len(pkt) == 0x58 && pkt[0] <= 3 {
-				log.Printf("signalprobe: probe %d bytes from %s type=%d", n, src, pkt[0])
+				log.Printf("signalprobe: probe %d bytes from %s type=%d %x", n, src, pkt[0], pkt)
 				if resp := p.ProbeResponseFor(pkt); resp != nil {
 					udp.WriteToUDP(resp, src)
 				}
-				if !probed {
+				if !probed && !src.IP.IsLoopback() {
 					probed = true
 					go func() {
 						time.Sleep(200 * time.Millisecond)

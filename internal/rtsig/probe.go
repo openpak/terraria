@@ -47,7 +47,8 @@ func ProbeResponsePacket(req []byte, ownSKey, peerSKey []byte, ownSID, peerSID u
 	out := ProbePacket(ownSKey, peerSKey, ownSID, peerSID)
 	out[0] = 2
 	copy(out[0x48:0x50], req[0x48:0x50])
-	binary.BigEndian.PutUint32(out[0x50:], binary.BigEndian.Uint32(req[0x50:])^uint32(ownSID))
+	// The validator un-XORs +0x50 with the packet's own +0x44 sid pair (vsh FUN_001e9518).
+	binary.BigEndian.PutUint32(out[0x50:], binary.BigEndian.Uint32(req[0x50:])^binary.BigEndian.Uint32(out[0x44:]))
 	binary.BigEndian.PutUint16(out[0x54:], binary.BigEndian.Uint16(req[0x54:])^ownSID)
 	return out
 }
