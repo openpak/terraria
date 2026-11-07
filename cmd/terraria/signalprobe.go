@@ -54,8 +54,19 @@ func signalprobe() error {
 	}
 	skey := make([]byte, 16)
 	rand.Read(skey)
+	// Offer the endpoint probes will really come from: the NAT mapping of this socket, learned via
+	// STUN like a console does. The configured public address is only the fallback.
+	self := rtsig.Candidate{Type: "stun", Address: pub, Port: uint16(port)}
+	if stunSrv := envOr("TERRARIA_SIGNAL_STUN", "stun.l.google.com:19302"); stunSrv != "off" {
+		if mapped, err := rtsig.STUNMapped(udp, stunSrv); err == nil {
+			self = mapped
+			log.Printf("signalprobe: stun mapped endpoint %s:%d", mapped.Address, mapped.Port)
+		} else {
+			log.Printf("signalprobe: stun: %v (offering configured candidate)", err)
+		}
+	}
 	p := &rtsig.Participant{
-		Self:    rtsig.Candidate{Type: "stun", Address: pub, Port: uint16(port)},
+		Self:    self,
 		SID:     sid,
 		SKey:    skey,
 		HostJID: host + "@" + domain + "/ps3",
@@ -64,7 +75,7 @@ func signalprobe() error {
 	// Mirror the host's offer shape: stun, static and (when known) local candidates, so the host's
 	// candidate selection finds a pair it will actually probe.
 	p.OfferCandidates = []rtsig.Candidate{
-		{Type: "stun", Address: pub, Port: uint16(port)},
+		self,
 		{Type: "static", Address: "0.0.0.0", Port: uint16(port)},
 	}
 	if lip := os.Getenv("TERRARIA_SIGNAL_LOCAL_IP"); lip != "" {
