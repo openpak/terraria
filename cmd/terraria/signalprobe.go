@@ -38,7 +38,11 @@ func signalprobe() error {
 	}
 	defer cl.Close()
 	log.Printf("signalprobe: RT signed in as %s", cl.JID)
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 3658})
+	port := 3658
+	if v := os.Getenv("TERRARIA_SIGNAL_PORT"); v != "" {
+		fmt.Sscan(v, &port)
+	}
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
 	if err != nil {
 		return err
 	}
@@ -51,7 +55,7 @@ func signalprobe() error {
 	skey := make([]byte, 16)
 	rand.Read(skey)
 	p := &rtsig.Participant{
-		Self:    rtsig.Candidate{Type: "stun", Address: pub, Port: 3658},
+		Self:    rtsig.Candidate{Type: "stun", Address: pub, Port: uint16(port)},
 		SID:     sid,
 		SKey:    skey,
 		HostJID: host + "@" + domain + "/ps3",
@@ -60,11 +64,11 @@ func signalprobe() error {
 	// Mirror the host's offer shape: stun, static and (when known) local candidates, so the host's
 	// candidate selection finds a pair it will actually probe.
 	p.OfferCandidates = []rtsig.Candidate{
-		{Type: "stun", Address: pub, Port: 3658},
-		{Type: "static", Address: "0.0.0.0", Port: 3658},
+		{Type: "stun", Address: pub, Port: uint16(port)},
+		{Type: "static", Address: "0.0.0.0", Port: uint16(port)},
 	}
 	if lip := os.Getenv("TERRARIA_SIGNAL_LOCAL_IP"); lip != "" {
-		p.OfferCandidates = append(p.OfferCandidates, rtsig.Candidate{Type: "local", Address: lip, Port: 3658})
+		p.OfferCandidates = append(p.OfferCandidates, rtsig.Candidate{Type: "local", Address: lip, Port: uint16(port)})
 	}
 	p.Send = func(s string) error {
 		log.Printf("signalprobe: >> %s", s)
