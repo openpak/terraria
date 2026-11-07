@@ -94,6 +94,18 @@ func signalprobe() error {
 		// before it answers (observed: it terminates after ~10s when none arrive).
 		go func() {
 			pkt := p.ProbePacketFor()
+			if os.Getenv("TERRARIA_SIGNAL_SPRAY") == "1" {
+				// Find the host's real signaling port: spray the probe across its local address.
+				for _, t := range p.ProbeTargets() {
+					if t.Type != "local" {
+						continue
+					}
+					for port := 1024; port <= 8192; port++ {
+						udp.WriteToUDP(pkt, &net.UDPAddr{IP: net.ParseIP(t.Address), Port: port})
+					}
+					log.Printf("signalprobe: sprayed probe to %s ports 1024-8192", t.Address)
+				}
+			}
 			for i := 0; i < 40; i++ {
 				for _, t := range p.ProbeTargets() {
 					dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
