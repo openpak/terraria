@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/openpak/terraria/internal/pia"
@@ -15,21 +16,32 @@ import (
 // hostLeg answers a Wii U's station handshake as the host it thinks it is joining (relay leg W, prds#145): ack its connection
 // request, send the inverse request, ack its connection response and answer with ours. Everything it sends is captured.
 type hostLeg struct {
-	conn  net.PacketConn
-	key   []byte
-	pid   uint32
-	self  netip.AddrPort
-	enc   *json.Encoder
-	start time.Time
-	ours  map[string]uint32 // peer -> ack id of our inverse request
-	done  map[string]bool   // peer -> our response sent
-	info  map[string]*pia.ConnRequest
-	conn1 map[string]uint8  // peer -> connection id it uses once connected (packet header)
-	pkt   map[string]uint16 // peer -> our next packet id
+	mu      sync.Mutex
+	conn    net.PacketConn
+	key     []byte
+	pid     uint32
+	self    netip.AddrPort
+	enc     *json.Encoder
+	start   time.Time
+	ours    map[string]uint32 // peer -> ack id of our inverse request
+	done    map[string]bool   // peer -> our response sent
+	info    map[string]*pia.ConnRequest
+	conn1   map[string]uint8  // peer -> connection id it uses once connected (packet header)
+	pkt     map[string]uint16 // peer -> our next packet id
+	rel     map[string]*relState
+	joinAck map[string]uint32
+}
+
+// relState is one peer's reliable stream: our next sequence, what we expect next, unacked data to resend.
+type relState struct {
+	sendSeq, recvNext uint32
+	hello             bool
+	pending           map[uint32][]byte
+	last              time.Time
 }
 
 func newHostLeg(conn net.PacketConn, key []byte, pid uint32, self netip.AddrPort, enc *json.Encoder) *hostLeg {
-	return &hostLeg{conn: conn, key: key, pid: pid, self: self, enc: enc, start: time.Now(), ours: map[string]uint32{}, done: map[string]bool{}, info: map[string]*pia.ConnRequest{}, conn1: map[string]uint8{}, pkt: map[string]uint16{}}
+	return &hostLeg{conn: conn, key: key, pid: pid, self: self, enc: enc, start: time.Now(), ours: map[string]uint32{}, done: map[string]bool{}, info: map[string]*pia.ConnRequest{}, conn1: map[string]uint8{}, pkt: map[string]uint16{}, rel: map[string]*relState{}, joinAck: map[string]uint32{}}
 }
 
 func rnd32() uint32 {
@@ -78,6 +90,8 @@ func (h *hostLeg) sendMsgs(to net.Addr, theirTimer uint16, msgs []pia.Message) {
 }
 
 func (h *hostLeg) handle(b []byte, from net.Addr) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	p, err := pia.Decode(b, h.key)
 	if err != nil {
 		return
@@ -99,6 +113,12 @@ func (h *hostLeg) handle(b []byte, from net.Addr) {
 				reply(pia.ProtoRTT, m.Port, out)
 			}
 			continue
+		case pia.ProtoReliable:
+			h.reliable(from, p.SrcTimer, m)
+			continue
+		case pia.ProtoUnreliable:
+			log.Printf("host leg: %s unreliable %dB: %s", peer, len(m.Payload), hexHead(m.Payload, 48))
+			continue
 		case pia.ProtoSessionClk:
 			if len(m.Payload) >= 16 {
 				out := append([]byte(nil), m.Payload[:8]...)
@@ -115,6 +135,7 @@ func (h *hostLeg) handle(b []byte, from net.Addr) {
 					continue
 				}
 				log.Printf("host leg: %s mesh join request (ack %08x) -> join response, host 0, joiner 1", peer, j.AckID)
+				h.joinAck[peer] = j.AckID
 				h.sendProto(from, p.SrcTimer, pia.ProtoSession, 0, pia.JoinResponse(0, 1, []pia.MeshStation{
 					{Public: h.location(3), Private: h.location(0), Index: 0},
 					{Public: req.Public, Private: req.Private, Index: 1},
@@ -147,6 +168,33 @@ func (h *hostLeg) handle(b []byte, from net.Addr) {
 			h.send(from, p.SrcTimer, ack, inv.Marshal())
 		case s.Type == pia.StationAck:
 			log.Printf("host leg: %s ack %08x (ours %08x)", peer, s.AckID, h.ours[peer])
+			if h.joinAck[peer] != 0 && s.AckID == h.joinAck[peer] && h.rel[peer] == nil {
+				// the joiner holds our join response: the game host greets it with PlayerId (type 0, slot 1)
+				h.rel[peer] = &relState{sendSeq: pia.ReliableFirstSeq, recvNext: pia.ReliableFirstSeq, pending: map[uint32][]byte{}}
+				// a real host follows the join with an update-mesh carrying every StationInfo; the joiner registers the stations
+				// (and resolves their PIDs) from it
+				if req := h.info[peer]; req != nil {
+					h.sendProto(from, p.SrcTimer, pia.ProtoSession, 0, pia.UpdateMesh(0, 1, []pia.MeshStation{
+						{Public: h.location(3), Private: h.location(0), Index: 0},
+						{Public: req.Public, Private: req.Private, Index: 1},
+					}))
+					log.Printf("host leg: %s update mesh (2 stations)", peer)
+				}
+				// The client creates the host's gamer on its next session sync, a moment after the mesh join; a PlayerId that
+				// arrives earlier is acked by PIA and dropped by the game. Greet after a short delay and repeat until Hello.
+				st := h.rel[peer]
+				go func() {
+					for i := 0; i < 6 && !st.hello; i++ {
+						time.Sleep(2 * time.Second)
+						h.mu.Lock()
+						if !st.hello {
+							log.Printf("host leg: %s Terraria PlayerId slot 1 (try %d)", peer, i+1)
+							h.sendGame(from, 0, []byte{0x00, 0x01})
+						}
+						h.mu.Unlock()
+					}
+				}()
+			}
 		case s.Response != nil:
 			log.Printf("host leg: %s connection response result %d version %d platform %d token %q player %q", peer,
 				s.Response.Result, s.Response.Version, s.Response.Platform, s.Response.Token, s.Response.Player.Name)
@@ -162,4 +210,46 @@ func (h *hostLeg) handle(b []byte, from net.Addr) {
 			log.Printf("host leg: %s station type %d", peer, s.Type)
 		}
 	}
+}
+
+// sendGame sends one Terraria message to the joiner over the reliable channel (port 1).
+func (h *hostLeg) sendGame(to net.Addr, theirTimer uint16, payload []byte) {
+	st := h.rel[to.String()]
+	m := pia.ReliableMsg{Flags: pia.RelData | pia.RelLast, Seq: st.sendSeq, Ack: st.recvNext, Payload: payload}
+	st.pending[st.sendSeq] = m.Marshal()
+	st.sendSeq++
+	h.sendMsgs(to, theirTimer, []pia.Message{{SrcStation: 0, Destination: 0x2, SrcConstant: 1, Protocol: pia.ProtoReliable, Port: pia.ReliablePort, Payload: m.Marshal()}})
+}
+
+// reliable handles the joiner's reliable stream: acks, Terraria messages (logged and answered as a host would).
+func (h *hostLeg) reliable(from net.Addr, theirTimer uint16, m pia.Message) {
+	peer := from.String()
+	st := h.rel[peer]
+	r, err := pia.ParseReliable(m.Payload)
+	if err != nil || st == nil {
+		log.Printf("host leg: %s reliable (port %d) unparsed %dB: %s", peer, m.Port, len(m.Payload), hexHead(m.Payload, 48))
+		return
+	}
+	for seq := range st.pending {
+		if int32(seq-r.Ack) < 0 {
+			delete(st.pending, seq)
+		}
+	}
+	if !r.IsData() {
+		return
+	}
+	if r.Seq == st.recvNext {
+		st.recvNext++
+		log.Printf("host leg: %s TERRARIA msg type %d (%d bytes): %s", peer, r.Payload[0], len(r.Payload), hexHead(r.Payload, 64))
+		switch r.Payload[0] {
+		case 0x01: // Hello [01][version][slot]: request player info [03][slot], as the host does for a matching version
+			st.hello = true
+			if len(r.Payload) >= 3 {
+				log.Printf("host leg: %s Hello, version %d, slot %d -> request player info", peer, r.Payload[1], r.Payload[2])
+				h.sendGame(from, theirTimer, []byte{0x03, r.Payload[2]})
+			}
+		}
+	}
+	ack := pia.ReliableMsg{Ack: st.recvNext}
+	h.sendMsgs(from, theirTimer, []pia.Message{{SrcStation: 0, Destination: 0x2, SrcConstant: 1, Protocol: pia.ProtoReliable, Port: m.Port, Payload: ack.Marshal()}})
 }

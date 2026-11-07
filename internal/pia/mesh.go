@@ -32,9 +32,7 @@ type MeshStation struct {
 	Index           uint8
 }
 
-// JoinResponse builds an accepted join response (3.x): every station of the mesh in one fragment.
-func JoinResponse(hostIndex, joinerIndex uint8, stations []MeshStation, ackID uint32) []byte {
-	b := []byte{MeshJoinResp, uint8(len(stations)), hostIndex, joinerIndex, 1, 0, uint8(len(stations)), 0}
+func appendStations(b []byte, stations []MeshStation) []byte {
 	for _, s := range stations {
 		start := len(b)
 		b = s.Public.append(b)
@@ -44,6 +42,21 @@ func JoinResponse(hostIndex, joinerIndex uint8, stations []MeshStation, ackID ui
 			b = append(b, 0)
 		}
 	}
+	return b
+}
+
+// UpdateMesh builds an update-mesh message (0x20): every station of the mesh, one fragment.
+func UpdateMesh(hostIndex uint8, counter uint32, stations []MeshStation) []byte {
+	b := []byte{MeshUpdate, uint8(len(stations)), hostIndex, 0}
+	b = binary.BigEndian.AppendUint32(b, counter)
+	b = append(b, 1, 0, uint8(len(stations)), 0)
+	return appendStations(b, stations)
+}
+
+// JoinResponse builds an accepted join response (3.x): every station of the mesh in one fragment.
+func JoinResponse(hostIndex, joinerIndex uint8, stations []MeshStation, ackID uint32) []byte {
+	b := []byte{MeshJoinResp, uint8(len(stations)), hostIndex, joinerIndex, 1, 0, uint8(len(stations)), 0}
+	b = appendStations(b, stations)
 	return binary.BigEndian.AppendUint32(b, ackID)
 }
 
