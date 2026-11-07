@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/openpak/terraria/internal/rtsig"
+	"github.com/openpak/terraria/internal/rudp"
 )
 
 // signalprobe is the first live instrument for the PS3 relay leg: it signs into the RT stream as the
@@ -62,23 +63,61 @@ func signalprobe() error {
 	}
 	cl.Log = func(s string) { log.Printf("signalprobe: << %s", s) }
 	probed := false
+	var rc *rudp.Conn
 	p.OnProbe = func(c rtsig.Candidate) { log.Printf("signalprobe: host candidate %s:%d, probing", c.Address, c.Port) }
 	p.OnMutual = func(c rtsig.Candidate) {
 		log.Printf("signalprobe: MUTUAL ACTIVATED, host RUDP endpoint %s:%d", c.Address, c.Port)
-	}
-	pl := &rtsig.ProbeListener{Conn: udp, SID: sid, OnPeer: func(src *net.UDPAddr, pkt []byte) {
-		log.Printf("signalprobe: udp %d bytes from %s first=%02x", len(pkt), src, pkt[0])
-		if !probed {
-			probed = true
-			go func() {
-				time.Sleep(200 * time.Millisecond)
-				if err := p.ProbeOK(); err != nil {
-					log.Printf("signalprobe: accept after probe: %v", err)
-				}
-			}()
+		var isn uint16
+		var cid uint32
+		binary.Read(rand.Reader, binary.BigEndian, &isn)
+		binary.Read(rand.Reader, binary.BigEndian, &cid)
+		rc = rudp.New(udp, &net.UDPAddr{IP: net.ParseIP(c.Address), Port: int(c.Port)}, isn, cid)
+		rc.OnPayload = func(b []byte) { log.Printf("signalprobe: game payload %d bytes: %x", len(b), b) }
+		rc.OnEstablished = func() {
+			log.Printf("signalprobe: RUDP ESTABLISHED, sending Terraria Hello")
+			if err := rc.Send([]byte{1, 1, 1}); err != nil { // joiner Hello [01][01][slot=1] [I]
+				log.Printf("signalprobe: hello: %v", err)
+			}
 		}
-	}}
-	go pl.Serve()
+		if err := rc.Start(); err != nil {
+			log.Printf("signalprobe: rudp start: %v", err)
+		}
+	}
+	// One socket serves the probe phase first and RUDP after mutual: probes are 0x58-byte packets with
+	// first byte <= 3, RUDP frames start with a class/length word (first byte 0x40..0xff).
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			udp.SetReadDeadline(time.Now().Add(30 * time.Second))
+			n, src, err := udp.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			pkt := append([]byte(nil), buf[:n]...)
+			if len(pkt) == 0x58 && pkt[0] <= 3 {
+				log.Printf("signalprobe: probe %d bytes from %s type=%d", n, src, pkt[0])
+				if resp := rtsig.ProbeResponse(pkt, sid); resp != nil {
+					udp.WriteToUDP(resp, src)
+				}
+				if !probed {
+					probed = true
+					go func() {
+						time.Sleep(200 * time.Millisecond)
+						if err := p.ProbeOK(); err != nil {
+							log.Printf("signalprobe: accept after probe: %v", err)
+						}
+					}()
+				}
+				continue
+			}
+			log.Printf("signalprobe: udp %d bytes from %s: %x", n, src, pkt)
+			if rc != nil {
+				if err := rc.HandleDatagram(pkt); err != nil {
+					log.Printf("signalprobe: rudp: %v", err)
+				}
+			}
+		}
+	}()
 	if err := p.Start(); err != nil {
 		return err
 	}

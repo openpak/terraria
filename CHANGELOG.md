@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.1 - 2026-11-07
+
+PS3 relay leg, RUDP: `internal/rudp` implements the cellRudp wire protocol from the librudp decompile (aggregator frames, simultaneous SYN/SYN+ACK open, cumulative-ack data) with the decompile's first-packet bytes as a golden test, and `signalprobe` now starts RUDP toward the host candidate at mutual activation and sends the joiner Terraria Hello on ESTABLISHED, logging every game payload.
+
 ## v0.2.0 - 2026-11-07
 
 PS3 relay leg groundwork (prds#145): `internal/rtsig` implements the NP RT signaling exchange (udpp2p/netinfo stanza codec, the offer → probe → accept → activated participant state machine, the 0x58-byte UDP probe responder, and an RT stream client that signs in as the joiner account), plus a `terraria signalprobe` instrument that activates signaling toward a hosting PS3 and logs every stanza and packet until mutual activation. Not yet wired into `serve`; the librudp handshake after mutual activation is still being decoded.
