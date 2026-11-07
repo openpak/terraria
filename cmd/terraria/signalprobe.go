@@ -81,6 +81,12 @@ func signalprobe() error {
 	if lip := os.Getenv("TERRARIA_SIGNAL_LOCAL_IP"); lip != "" {
 		p.OfferCandidates = append(p.OfferCandidates, rtsig.Candidate{Type: "local", Address: lip, Port: uint16(port)})
 	}
+	if os.Getenv("TERRARIA_SIGNAL_LOCAL_ONLY") == "1" {
+		// Same-subnet test: offer only the local candidate so the host pairs its local candidate
+		// with ours instead of the (shared-NAT) stun endpoint.
+		p.Self = rtsig.Candidate{Type: "local", Address: os.Getenv("TERRARIA_SIGNAL_LOCAL_IP"), Port: uint16(port)}
+		p.OfferCandidates = []rtsig.Candidate{p.Self}
+	}
 	p.Send = func(s string) error {
 		log.Printf("signalprobe: >> %s", s)
 		return cl.Send(s)
@@ -94,6 +100,24 @@ func signalprobe() error {
 		// before it answers (observed: it terminates after ~10s when none arrive).
 		go func() {
 			pkt := p.ProbePacketFor()
+			if os.Getenv("TERRARIA_SIGNAL_PERMUTE") == "1" {
+				// Validator search: cycle every field-order variant at the local candidate.
+				go func() {
+					vs := p.ProbeVariants()
+					for i := 0; i < 30; i++ {
+						for _, t := range p.ProbeTargets() {
+							if t.Type != "local" {
+								continue
+							}
+							dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
+							for _, v := range vs {
+								udp.WriteToUDP(v, dst)
+							}
+						}
+						time.Sleep(300 * time.Millisecond)
+					}
+				}()
+			}
 			if os.Getenv("TERRARIA_SIGNAL_SPRAY") == "1" {
 				// Find the host's real signaling port: spray the probe across its local address.
 				for _, t := range p.ProbeTargets() {

@@ -1,8 +1,10 @@
 package rtsig
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // Participant is the relay side of the udpp2p activation with one host (spec §7 of the decode).
@@ -82,6 +84,20 @@ func (p *Participant) ProbePacketFor() []byte {
 // ProbeResponseFor builds the type-2 answer to a host probe from this connection's fields.
 func (p *Participant) ProbeResponseFor(req []byte) []byte {
 	return ProbeResponsePacket(req, p.SKey, p.peerKey, p.SID, p.peerSID)
+}
+
+// ProbeVariants returns the probe packet in every plausible field order (live validator search):
+// skey order × sid order, plus one carrying a current timestamp at +0x48 like the builder writes.
+func (p *Participant) ProbeVariants() [][]byte {
+	base := ProbePacket(p.SKey, p.peerKey, p.SID, p.peerSID)
+	swapKeys := ProbePacket(p.peerKey, p.SKey, p.SID, p.peerSID)
+	swapSIDs := ProbePacket(p.SKey, p.peerKey, p.peerSID, p.SID)
+	swapBoth := ProbePacket(p.peerKey, p.SKey, p.peerSID, p.SID)
+	stamped := append([]byte(nil), base...)
+	now := uint64(time.Now().UnixMilli())
+	binary.BigEndian.PutUint32(stamped[0x48:], uint32(now>>32))
+	binary.BigEndian.PutUint32(stamped[0x4c:], uint32(now))
+	return [][]byte{base, swapKeys, swapSIDs, swapBoth, stamped}
 }
 
 // ProbeTargets returns every candidate the host offered.
