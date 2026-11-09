@@ -99,7 +99,7 @@ func signalprobe() error {
 		// Send our own type-1 probes to every host candidate: the host expects a probe from us
 		// before it answers (observed: it terminates after ~10s when none arrive).
 		go func() {
-			pkt := p.ProbePacketFor()
+			pkt := rtsig.FrameSignal(p.ProbePacketFor())
 			if os.Getenv("TERRARIA_SIGNAL_PERMUTE") == "1" {
 				// Validator search: cycle every field-order variant at the local candidate.
 				go func() {
@@ -111,7 +111,7 @@ func signalprobe() error {
 							}
 							dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
 							for _, v := range vs {
-								udp.WriteToUDP(v, dst)
+								udp.WriteToUDP(rtsig.FrameSignal(v), dst)
 							}
 						}
 						time.Sleep(300 * time.Millisecond)
@@ -173,10 +173,14 @@ func signalprobe() error {
 				return
 			}
 			pkt := append([]byte(nil), buf[:n]...)
-			if len(pkt) == 0x58 && pkt[0] <= 3 {
-				log.Printf("signalprobe: probe %d bytes from %s type=%d %x", n, src, pkt[0], pkt)
-				if resp := p.ProbeResponseFor(pkt); resp != nil {
-					udp.WriteToUDP(resp, src)
+			// Every PS3 datagram carries the UDPP2P header; record kind/vports of anything that is not a
+			// signaling probe (RUDP data uses its own kind/vports, card #145).
+			if kind, sv, dv, body, err := rtsig.Unframe(pkt); err != nil {
+				log.Printf("signalprobe: UNFRAMED %d bytes from %s: %x", n, src, pkt)
+			} else if len(body) == 0x58 && body[0] <= 3 && dv == rtsig.VPortSignal {
+				log.Printf("signalprobe: probe %d bytes from %s kind=%d vport %#x->%#x type=%d %x", n, src, kind, sv, dv, body[0], body)
+				if resp := p.ProbeResponseFor(body); resp != nil {
+					udp.WriteToUDP(rtsig.FrameSignal(resp), src)
 				}
 				if !probed && !src.IP.IsLoopback() {
 					probed = true
@@ -190,6 +194,8 @@ func signalprobe() error {
 				continue
 			}
 			log.Printf("signalprobe: udp %d bytes from %s: %x", n, src, pkt)
+			// ponytail: RUDP framing on the game socket (kind/vports) is unrecorded; the raw datagram is
+			// handed to rudp as before until a live capture shows it.
 			if rc != nil {
 				if err := rc.HandleDatagram(pkt); err != nil {
 					log.Printf("signalprobe: rudp: %v", err)

@@ -69,12 +69,16 @@ func (l *ProbeListener) Serve() {
 		if err != nil {
 			return
 		}
+		// Real consoles frame every datagram (UDPP2P); unframed packets are still passed to OnPeer
+		// so a framing mismatch shows up in the log, but only framed probes are answered.
 		pkt := append([]byte(nil), buf[:n]...)
 		if l.OnPeer != nil {
 			l.OnPeer(src, pkt)
 		}
-		if resp := ProbeResponse(pkt, l.SID); resp != nil {
-			l.Conn.WriteToUDP(resp, src)
+		if _, _, _, body, err := Unframe(pkt); err == nil {
+			if resp := ProbeResponse(body, l.SID); resp != nil {
+				l.Conn.WriteToUDP(FrameSignal(resp), src)
+			}
 		}
 	}
 }
