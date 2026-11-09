@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.11 - 2026-11-09
+
+`rtsig`/`signalprobe` (prds#145): every signaling datagram now carries the lv2 UDPP2P kernel header (`ff 83 ff fe ff fe` for VSH's vport 0xfffe) on send, and received datagrams are validated and stripped; unframed packets and framed non-probe packets (RUDP) are logged raw for the next live run. The PS3 kernel drops bare packets, the likely reason earlier probes never got an answer. Not yet proven live.
+
 ## v0.2.2 - 2026-11-07
 
 `signalprobe`: the RT sign-in now speaks the RT front's PS3-era TLS (TLS 1.0–1.2, RSA-CBC suites, verification skipped for this internal participant). First live exchange: signed in as the joiner account and the hosting PS3 answered with its own udpp2p offer within a second (both forwards logged by np-community).
