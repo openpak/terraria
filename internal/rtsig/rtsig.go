@@ -168,8 +168,15 @@ func Simple(action, id, to, from string, sid, psid uint16) string {
 	return iqXML("set", id, to, from, q)
 }
 
-// Ack is the bare iq result the firmware answers every udpp2p set with (no query child).
-func Ack(id, to, from string) string { return iqXML("result", id, to, from, "") }
+// Ack answers a udpp2p set. The firmware's own ack is a bare iq result, but np-community (<= v0.4.8)
+// only forwards iqs that carry a udpp2p/netinfo query child and silently drops bare results, so the
+// host never saw our ack of its offer, stayed in state 5 (own offer unacked) and never entered the
+// probing state 7 (vsh FUN_001f5d78 event 9). An empty udpp2p query rides through the relay; the
+// host matches results by iq id (it has no action, so its stanza parser never runs on it).
+// ponytail: workaround for the relay; drop the query once np-community forwards bare results.
+func Ack(id, to, from string) string {
+	return iqXML("result", id, to, from, `<query xmlns="`+NSUdpp2p+`"/>`)
+}
 
 // NetinfoResult answers a netinfo get with the four required child groups in firmware order.
 func NetinfoResult(id, to, from, local, mapped, upnp, npStatus string, npPort uint16, nat string) string {

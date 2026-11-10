@@ -21,8 +21,12 @@ func TestStanzaShapes(t *testing.T) {
 		t.Fatalf("accept round trip: %v %+v", err, st)
 	}
 	ack := Ack("a", "H@d/ps3", "J@d/ps3")
-	if strings.Contains(ack, "<query") {
-		t.Fatalf("ack must be bare: %s", ack)
+	// np-community forwards only iqs with a udpp2p/netinfo query child; a bare ack is dropped.
+	if !strings.Contains(ack, `<query xmlns="`+NSUdpp2p+`"/>`) || strings.Contains(ack, "action=") {
+		t.Fatalf("ack must carry an empty udpp2p query: %s", ack)
+	}
+	if st, err := Parse(ack); err != nil || st.Kind != "result" || st.Action != "" {
+		t.Fatalf("ack round trip: %v %+v", err, st)
 	}
 	ni, err := Parse(NetinfoResult("c", "H@d/ps3", "J@d/ps3", "10.0.0.1", "203.0.113.5", "valid", "open", 3658, "type2"))
 	if err != nil || ni.NetLocal != "10.0.0.1" || ni.NetNPPort != 3658 || ni.NetNAT != "type2" {
@@ -68,7 +72,11 @@ func TestParticipantMutual(t *testing.T) {
 	if mutual {
 		t.Fatal("mutual before activated exchange")
 	}
-	if err := p.Handle(Stanza{Kind: "result", ID: "sig2"}); err != nil {
+	// activated goes out on the host accept, without the (relay-dropped) ack of our accept
+	if last := sent[len(sent)-1]; !strings.Contains(last, `action="activated"`) {
+		t.Fatalf("activated after host accept: %s", last)
+	}
+	if err := p.Handle(Stanza{NS: NSUdpp2p, Kind: "result", ID: "sig2"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Handle(Stanza{NS: NSUdpp2p, Kind: "set", ID: "e", Action: "activated", SID: 3, PSID: 7}); err != nil {

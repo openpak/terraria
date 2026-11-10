@@ -113,7 +113,10 @@ func (p *Participant) FromHost(body []byte) bool {
 func (p *Participant) ProbeTargets() []Candidate { return p.hostCands }
 
 func (p *Participant) maybeActivated() error {
-	if p.actOut || !p.accOut || !p.accAck || !p.peerAcc {
+	// ponytail: no wait for the host's ack of our accept: np-community (<= v0.4.8) drops the
+	// firmware's bare results, so it never arrives. The RT stream keeps order, so the host still
+	// sees accept before activated (event 0x21 in state 8/9 only sets its peer-activated flag).
+	if p.actOut || !p.accOut || !p.peerAcc {
 		return nil
 	}
 	p.actOut = true
@@ -132,8 +135,9 @@ func (p *Participant) checkMutual() {
 
 // Handle consumes one parsed stanza from the host and drives the exchange.
 func (p *Participant) Handle(st Stanza) error {
-	// A bare result (no query) acks one of our sets: offer first, then accept.
-	if st.Kind == "result" && st.Action == "" && st.NS == "" {
+	// A result without an action acks one of our sets (bare from firmware, or with an empty
+	// udpp2p query once relayed as our Ack is): offer first, then accept.
+	if st.Kind == "result" && st.Action == "" && st.NS != NSNetinfo {
 		if p.offerOut && !p.offAck {
 			p.offAck = true
 			return nil

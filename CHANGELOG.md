@@ -4,6 +4,8 @@
 
 `rtsig`/`signalprobe` (prds#145): the signaling probe now follows the vsh 4.93 layout. +0x04 and +0x24 carry the sender's and the peer's **NpId** (32-byte probe form: online id, opt = JID domain labels 1+2 + resource, reserved[0] = 1). They used to carry the skeys, so the host's NpId lookup (`sceNpUtilCmpNpId`) failed and dropped every probe without answering. Type-2 responses now carry the requester's source IPv4/port XOR the sid pair, and the request's send time is echoed. `signalprobe` ignores its own probes when the shared NAT hairpins them back (every "host probe" on 2026-11-10 was one) and sends `accept` only after a genuine host probe. The field-order permutation mode is gone. Not yet proven live.
 
+`rtsig` (prds#145): our udpp2p acks now carry an empty `<query xmlns="http://playstation.net/np/rt/udpp2p"/>`. np-community (v0.4.8) forwards only iqs that have a signaling query child and silently drops bare results, so the PS3 never received our ack of its offer. It stayed in state 5 (own offer unacked), never entered the probing state 7, and terminated when the offer request timed out (10 s): the zero-PS3-UDP result of the 2026-11-10 runs 2-4. For the same reason the PS3's bare acks never reach us, so `activated` no longer waits for the ack of our accept. Not yet proven live.
+
 ## v0.2.11 - 2026-11-09
 
 `rtsig`/`signalprobe` (prds#145): every signaling datagram now carries the lv2 UDPP2P kernel header (`ff 83 ff fe ff fe` for VSH's vport 0xfffe) on send, and received datagrams are validated and stripped; unframed packets and framed non-probe packets (RUDP) are logged raw for the next live run. The PS3 kernel drops bare packets, the likely reason earlier probes never got an answer. Not yet proven live.
