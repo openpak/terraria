@@ -2,8 +2,11 @@ package rtsig
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"net"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +74,62 @@ func TestProbeResponse(t *testing.T) {
 	}
 	if ProbeResponsePacket(resp, src, own, peer, 1, 2) != nil {
 		t.Fatal("answered a type-2")
+	}
+}
+
+// Live run 5 2026-11-10 14:40 (card #145): joiner sid 56123 (0xdb3b), host sid 37281 (0x91a1).
+func TestLive5HostPackets(t *testing.T) {
+	own, _ := NpIDFromJID(liveSelf)
+	peer, _ := NpIDFromJID(liveHost)
+	raw, err := os.ReadFile("testdata/live5-type3.hex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkt, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(pkt) != 1118 {
+		t.Fatalf("type-3 capture: %v %d", err, len(pkt))
+	}
+	kind, sv, dv, body, err := Unframe(pkt)
+	if err != nil || kind != KindPlain || sv != VPortSignal || dv != VPortSignal || len(body) != 0x458 {
+		t.Fatalf("type-3 frame %d %#x %#x %d %v", kind, sv, dv, len(body), err)
+	}
+	// 0x58 header like a type 1 (host NpId, ours, sids, send time), estimate 0 (we sent no pairs), padding.
+	if est, ok := Bandwidth(body); !ok || est != 0 || !ProbeFrom(body, own, peer) || binary.BigEndian.Uint32(body[0x44:]) != 0x91a1db3b {
+		t.Fatalf("type-3 decode est=%d ok=%v", est, ok)
+	}
+	if _, ok := Bandwidth(body[:0x57]); ok || EchoReply(body) != nil {
+		t.Fatal("type 3 answered as echo")
+	}
+
+	// Host keepalive (state 10, every 10 s) and our reply, as captured at 14:40:13.884.
+	ka, _ := hex.DecodeString("01000000" +
+		"5053335465737400000000000000000075737573707333000100000000000000" +
+		"5377697463685465737400000000000075737573707333000100000000000000" +
+		"91a1db3b" + "00000000ad1a77f4" + "0000000000000000")
+	want, _ := hex.DecodeString("02000000" +
+		"5377697463685465737400000000000075737573707333000100000000000000" +
+		"5053335465737400000000000000000075737573707333000100000000000000" +
+		"db3b91a1" + "00000000ad1a77f4" + "d16c91aa" + "d571" + "0000")
+	p := &Participant{SID: 0xdb3b, peerSID: 0x91a1, SelfJID: liveSelf, HostJID: liveHost}
+	src := &net.UDPAddr{IP: net.IPv4(10, 87, 0, 11), Port: 3658}
+	if got := p.ProbeResponseFor(ka, src); !bytes.Equal(got, want) {
+		t.Fatalf("keepalive reply\n got %x\nwant %x", got, want)
+	}
+	// The reply mirrors the host's NpId bytes even when its opt is not our JID form (Matching2 member NpId).
+	odd := append([]byte(nil), ka...)
+	copy(odd[0x24+16:], "ptnpps3\x00")
+	if got := p.ProbeResponseFor(odd, src); got == nil || !bytes.Equal(got[0x04:0x24], odd[0x24:0x44]) {
+		t.Fatalf("mirror: %x", got)
+	}
+}
+
+func TestEchoReply(t *testing.T) {
+	req, _ := hex.DecodeString("04000000" + "12340000" + "0000000102030405")
+	want, _ := hex.DecodeString("05000000" + "12340000" + "0000000102030405")
+	if got := EchoReply(req); !bytes.Equal(got, want) {
+		t.Fatalf("echo %x", got)
+	}
+	if EchoReply(want) != nil || EchoReply(req[:15]) != nil {
+		t.Fatal("echo of non-request")
 	}
 }

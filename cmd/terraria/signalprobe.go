@@ -69,7 +69,7 @@ func signalprobe() error {
 		Self:    self,
 		SID:     sid,
 		SKey:    skey,
-		HostJID: host + "@" + domain + "/ps3",
+		HostJID: envOr("TERRARIA_SIGNAL_HOST_JID", host+"@"+domain+"/ps3"),
 		SelfJID: cl.JID,
 	}
 	// Mirror the host's offer shape: stun, static and (when known) local candidates, so the host's
@@ -92,7 +92,7 @@ func signalprobe() error {
 		return cl.Send(s)
 	}
 	cl.Log = func(s string) { log.Printf("signalprobe: << %s", s) }
-	probed := false
+	probed, established := false, false
 	var rc *rudp.Conn
 	p.OnProbe = func(c rtsig.Candidate) {
 		log.Printf("signalprobe: host candidate %s:%d, probing", c.Address, c.Port)
@@ -168,7 +168,20 @@ func signalprobe() error {
 			// signaling probe (RUDP data uses its own kind/vports, card #145).
 			if kind, sv, dv, body, err := rtsig.Unframe(pkt); err != nil {
 				log.Printf("signalprobe: UNFRAMED %d bytes from %s: %x", n, src, pkt)
-			} else if len(body) == 0x58 && body[0] <= 3 && dv == rtsig.VPortSignal {
+			} else if dv == rtsig.VPortSignal && len(body) > 0 && body[0] == 4 {
+				log.Printf("signalprobe: HOST echo %x from %s, answered", body, src)
+				if r := rtsig.EchoReply(body); r != nil {
+					udp.WriteToUDP(rtsig.FrameSignal(r), src)
+				}
+				continue
+			} else if est, ok := rtsig.Bandwidth(body); ok && dv == rtsig.VPortSignal && p.FromHost(body) {
+				// Sent only from vsh state 10: the host's connection is ESTABLISHED. No reply is expected.
+				if !established {
+					established = true
+					log.Printf("signalprobe: HOST ESTABLISHED (type-3 bandwidth pair, %d bytes, estimate of us %d)", n, est)
+				}
+				continue
+			} else if len(body) == 0x58 && body[0] <= 2 && dv == rtsig.VPortSignal {
 				if !p.FromHost(body) {
 					// Our own probe hairpinned back by the shared NAT (own NpId at +0x04): never answer it
 					// and never treat it as the host (2026-11-10: every "host probe" was one of these).
@@ -203,9 +216,15 @@ func signalprobe() error {
 			}
 		}
 	}()
-	if err := p.Start(); err != nil {
-		return err
-	}
+	// TERRARIA_SIGNAL_WAIT_OFFER=<s>: give the host's game time to offer first (its ActivateConnection toward
+	// our Matching2 member NpId, the connection its Terraria references); offer ourselves only after that.
+	wait := 0
+	fmt.Sscan(os.Getenv("TERRARIA_SIGNAL_WAIT_OFFER"), &wait)
+	time.AfterFunc(time.Duration(wait)*time.Second, func() {
+		if err := p.Start(); err != nil {
+			log.Printf("signalprobe: offer: %v", err)
+		}
+	})
 	done := time.After(10 * time.Minute)
 	errc := make(chan error, 1)
 	go func() { errc <- cl.Run(p) }()

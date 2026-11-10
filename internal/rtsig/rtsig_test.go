@@ -97,3 +97,28 @@ func TestParticipantMutual(t *testing.T) {
 		t.Fatalf("netinfo reply: %v %v", err, reply)
 	}
 }
+
+// A host-initiated offer (its game activating toward our Matching2 member NpId) sets the JIDs our offer
+// and probes use; an offer answering ours must not.
+func TestParticipantAdoptsHostOfferJIDs(t *testing.T) {
+	var sent []string
+	p := &Participant{SID: 7, SKey: make([]byte, 16), HostJID: "PS3Test@us.us.np.playstation.net/ps3", SelfJID: "SwitchTest@us.us.np.playstation.net/ps3",
+		Send: func(s string) error { sent = append(sent, s); return nil }}
+	host, self := "PS3Test@pt.pt.np.playstation.net/ps3", "SwitchTest@pt.np.np.playstation.net/ps3"
+	if err := p.Handle(Stanza{NS: NSUdpp2p, Kind: "set", ID: "a", Action: "offer", SID: 3, From: host, To: self}); err != nil {
+		t.Fatal(err)
+	}
+	if p.HostJID != host || p.SelfJID != self || !strings.Contains(sent[1], `to="`+host+`"`) || !strings.Contains(sent[1], `psid="3"`) {
+		t.Fatalf("jids %s %s, sent %v", p.HostJID, p.SelfJID, sent)
+	}
+	own, _, _ := p.NpIDs()
+	if string(own[16:24]) != "ptnpps3\x00" {
+		t.Fatalf("own npid opt %q", own[16:24])
+	}
+	q := &Participant{SID: 7, SKey: make([]byte, 16), HostJID: "H@us.us.np.playstation.net/ps3", SelfJID: "J@us.us.np.playstation.net/ps3", Send: func(string) error { return nil }}
+	q.Start()
+	q.Handle(Stanza{NS: NSUdpp2p, Kind: "set", ID: "b", Action: "offer", SID: 3, PSID: 7, From: host, To: self})
+	if q.HostJID != "H@us.us.np.playstation.net/ps3" {
+		t.Fatal("answer offer rewrote the host JID")
+	}
+}

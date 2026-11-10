@@ -10,13 +10,19 @@ import (
 
 // The signaling UDP probe, 0x58 bytes (vsh 4.93 builder FUN_001ea168, parser FUN_001e9518):
 //
-//	+0x00 type: 1 request, 2 response, 3 data (RTT); 4/5 are short forms
+//	+0x00 type: 1 request, 2 response, 3 bandwidth pair; 4/5 are a 16-byte echo (see EchoReply)
 //	+0x04 sender's own NpId (32-byte probe form, see NpIDFromJID)
 //	+0x24 sender's peer NpId
 //	+0x44 sender's sid, +0x46 peer sid
 //	+0x48 u64 send time (type 1), echoed by type 2
 //	+0x50 type 2: requester's IPv4 as the responder saw it, XOR the u32 at +0x44
 //	+0x54 type 2: requester's port, XOR the u16 at +0x44
+//	+0x50 type 3: u32 link estimate of the *receiver*, 0x22368b800 / median gap in us of the last 8 type-3
+//	      pairs the sender got from it (0 = none yet); then 0x400 random padding bytes (0x458 in all)
+//
+// Type 3 (FUN_001ea500) is sent only once the connection is established (vsh state 10): two identical
+// datagrams back to back, 9 times 500 ms apart, then every ~50 s. Plain, unsigned, no key material; the
+// padding only gives the pair its size. The receiver times the gap between the two and answers nothing.
 //
 // The receiver looks its connection up with sceNpUtilCmpNpId (FUN_001f79bc): packet +0x24 against its own
 // NpId, +0x04 against its peer's. The compare fails unless reserved[0] == 1 on both sides and opt[0..4]
@@ -67,11 +73,32 @@ func ProbeResponsePacket(req []byte, src *net.UDPAddr, ownNpID, peerNpID []byte,
 	return out
 }
 
-// ProbeFrom reports whether body is a probe the peer sent to us (its NpId at +0x04, ours at +0x24). Our
-// own probes hairpinned back by a shared NAT carry our NpId at +0x04 and are rejected.
+// ProbeFrom reports whether body is a probe the peer sent to us (its online id at +0x04, ours at +0x24).
+// Only the online ids are compared: the opt/reserved bytes are whatever the host's connection holds (its
+// Matching2 member NpId may differ from our JID form). Our own probes hairpinned back by a shared NAT
+// carry our online id at +0x04 and are rejected.
 func ProbeFrom(body, ownNpID, peerNpID []byte) bool {
 	return len(body) >= probeLen && body[0] >= 1 && body[0] <= 3 &&
-		bytes.Equal(body[0x04:0x24], peerNpID) && bytes.Equal(body[0x24:0x44], ownNpID)
+		bytes.Equal(body[0x04:0x14], peerNpID[:16]) && bytes.Equal(body[0x24:0x34], ownNpID[:16])
+}
+
+// Bandwidth decodes a type-3 bandwidth pair: the sender's estimate of our link (0 until we send pairs).
+func Bandwidth(body []byte) (estimate uint32, ok bool) {
+	if len(body) < probeLen || body[0] != 3 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(body[0x50:]), true
+}
+
+// EchoReply answers a type-4 echo (16 bytes: type, pad, u16 request id, u16, u64 send time) the way vsh
+// FUN_001e9518 does: the same 16 bytes back with type 5. nil for anything else.
+func EchoReply(body []byte) []byte {
+	if len(body) < 16 || body[0] != 4 {
+		return nil
+	}
+	out := append([]byte(nil), body[:16]...)
+	out[0] = 5
+	return out
 }
 
 // ProbeMapped decodes a type-2 response: our endpoint as the responder saw it.

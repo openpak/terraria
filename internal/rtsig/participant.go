@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -12,34 +13,35 @@ import (
 // valid peer probe; every stanza it wants sent goes through Send. Mutual is set when both activated
 // stanzas have been exchanged; OnMutual (if set) fires once at that moment.
 type Participant struct {
-	Self     Candidate // the relay endpoint offered to the host (also the RUDP listen endpoint)
+	Self Candidate // the relay endpoint offered to the host (also the RUDP listen endpoint)
 
 	// OfferCandidates, if non-empty, is the candidate list sent in the offer instead of just Self.
 	// Mirror the host: offer stun (public mapped), static and local forms so its candidate selection
 	// finds a pair it will probe.
 	OfferCandidates []Candidate
-	SID      uint16
-	SKey     []byte // 16 bytes, stable for the session
-	HostJID  string
-	SelfJID  string
-	Send     func(string) error
-	OnMutual func(host Candidate)
-	OnProbe  func(host Candidate) // probing should start toward this candidate
+	SID             uint16
+	SKey            []byte // 16 bytes, stable for the session
+	HostJID         string
+	SelfJID         string
+	Send            func(string) error
+	OnMutual        func(host Candidate)
+	OnProbe         func(host Candidate) // probing should start toward this candidate
 
 	peerSID   uint16
 	peerKey   []byte
 	hostCand  Candidate
 	hostCands []Candidate
-	offerOut bool // own offer sent
-	offAck   bool // host acked own offer
-	peerOff  bool // host offer received
-	accOut   bool
-	accAck   bool
-	peerAcc  bool
-	actOut   bool
-	actIn    bool
-	Mutual   bool
-	seq      int
+	offerOut  bool // own offer sent
+	offAck    bool // host acked own offer
+	peerOff   bool // host offer received
+	accOut    bool
+	accAck    bool
+	peerAcc   bool
+	actOut    bool
+	actIn     bool
+	Mutual    bool
+	seq       int
+	mu        sync.Mutex // Start, ProbeOK and Handle run on the RT, UDP and timer goroutines
 }
 
 func (p *Participant) nextID() string { p.seq++; return "sig" + strconv.Itoa(p.seq) }
@@ -53,6 +55,12 @@ func (p *Participant) send(s string) error {
 
 // Start sends the relay's offer (step 3; also correct before the host's offer arrives).
 func (p *Participant) Start() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.start()
+}
+
+func (p *Participant) start() error {
 	if p.offerOut {
 		return nil
 	}
@@ -66,6 +74,8 @@ func (p *Participant) Start() error {
 
 // ProbeOK reports the UDP probe phase succeeded; the accept can go out.
 func (p *Participant) ProbeOK() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.accOut || !p.peerOff {
 		return nil
 	}
@@ -94,13 +104,14 @@ func (p *Participant) ProbePacketFor() ([]byte, error) {
 	return ProbePacket(own, peer, p.SID, p.peerSID, uint64(time.Now().UnixMicro())), nil
 }
 
-// ProbeResponseFor answers a host type-1 probe received from src; nil if it is not one.
+// ProbeResponseFor answers a host type-1 probe received from src; nil if it is not one. The NpIds are
+// the request's own, swapped: the host looks its connection up with exactly those bytes.
 func (p *Participant) ProbeResponseFor(req []byte, src *net.UDPAddr) []byte {
 	own, peer, err := p.NpIDs()
 	if err != nil || !ProbeFrom(req, own, peer) {
 		return nil
 	}
-	return ProbeResponsePacket(req, src, own, peer, p.SID, p.peerSID)
+	return ProbeResponsePacket(req, src, req[0x24:0x44], req[0x04:0x24], p.SID, p.peerSID)
 }
 
 // FromHost reports whether body is a genuine host probe (not our own, hairpinned back).
@@ -135,6 +146,8 @@ func (p *Participant) checkMutual() {
 
 // Handle consumes one parsed stanza from the host and drives the exchange.
 func (p *Participant) Handle(st Stanza) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	// A result without an action acks one of our sets (bare from firmware, or with an empty
 	// udpp2p query once relayed as our Ack is): offer first, then accept.
 	if st.Kind == "result" && st.Action == "" && st.NS != NSNetinfo {
@@ -162,6 +175,16 @@ func (p *Participant) Handle(st Stanza) error {
 	}
 	switch st.Action {
 	case "offer":
+		if !p.offerOut {
+			// Host-initiated (its game's ActivateConnection toward our Matching2 member NpId): adopt the
+			// JIDs it used, so our offer, probes and the host's connection key on the same NpIds.
+			if _, err := NpIDFromJID(st.From); err == nil {
+				p.HostJID = st.From
+			}
+			if _, err := NpIDFromJID(st.To); err == nil {
+				p.SelfJID = st.To
+			}
+		}
 		p.peerSID, p.peerKey, p.peerOff = st.SID, st.SKey, true
 		p.hostCands = st.Candidates
 		if len(st.Candidates) > 0 {
@@ -175,7 +198,7 @@ func (p *Participant) Handle(st Stanza) error {
 		if err := p.send(Ack(st.ID, p.HostJID, p.SelfJID)); err != nil {
 			return err
 		}
-		if err := p.Start(); err != nil {
+		if err := p.start(); err != nil {
 			return err
 		}
 		if p.OnProbe != nil {
