@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.12 - 2026-11-10
+
+`terra` (prds#145, #157): `internal/terra.Translate` rewrites the three Terraria messages that differ between the Wii U build (1.08) and the patched PS3 build (1.09), both directions: Hello (version 13 <-> 15), PlayerInfo (hair moves between the u16 and its own byte, three extra PS3 bytes) and InventorySlot (Wii U dye 59-61 <-> PS3 64-66, PS3 equipment slots without a Wii U peer are dropped). The other 82 message types pass through. Tests pin the Wii U bytes from the M3 Quay capture; the PS3 layout is from the static decompile (the extra PlayerInfo bytes and the armour/dye split are inferred), so it is not wired into the relay until a PS3 join capture confirms it. No change to `serve`. Also in this tag: the `rtsig`/`signalprobe` changes below (NpId probes, empty-query acks, type 3-5 decode), instrument-only.
 
 `rtsig`/`signalprobe` (prds#145): the signaling probe now follows the vsh 4.93 layout. +0x04 and +0x24 carry the sender's and the peer's **NpId** (32-byte probe form: online id, opt = JID domain labels 1+2 + resource, reserved[0] = 1). They used to carry the skeys, so the host's NpId lookup (`sceNpUtilCmpNpId`) failed and dropped every probe without answering. Type-2 responses now carry the requester's source IPv4/port XOR the sid pair, and the request's send time is echoed. `signalprobe` ignores its own probes when the shared NAT hairpins them back (every "host probe" on 2026-11-10 was one) and sends `accept` only after a genuine host probe. The field-order permutation mode is gone. Not yet proven live.
 
