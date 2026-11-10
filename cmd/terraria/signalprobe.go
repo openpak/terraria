@@ -11,6 +11,7 @@ import (
 
 	"github.com/openpak/terraria/internal/rtsig"
 	"github.com/openpak/terraria/internal/rudp"
+	"github.com/openpak/terraria/internal/terra"
 )
 
 // signalprobe is the first live instrument for the PS3 relay leg: it signs into the RT stream as the
@@ -145,7 +146,7 @@ func signalprobe() error {
 		rc.OnPayload = func(b []byte) { log.Printf("signalprobe: game payload %d bytes: %x", len(b), b) }
 		rc.OnEstablished = func() {
 			log.Printf("signalprobe: RUDP ESTABLISHED, sending Terraria Hello")
-			if err := rc.Send([]byte{1, 1, 1}); err != nil { // joiner Hello [01][01][slot=1] [I]
+			if err := rc.Send(terra.Hello(terra.PS3, 1)); err != nil { // version 15 on NPEB01270 v01.12 (decompile); the old 1 was the v01.00 disc build
 				log.Printf("signalprobe: hello: %v", err)
 			}
 		}

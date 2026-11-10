@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.13 - 2026-11-10
+
+`signalprobe`: the joiner Hello sent on RUDP ESTABLISHED carries version 15 (patched PS3 NPEB01270 v01.12, decompile `cmpwi 15`) instead of 1 (the v01.00 disc build), so a real PS3 host does not kick the probe with "not the same version". `terra.Hello` builds it.
+
 ## v0.2.12 - 2026-11-10
 
 `terra` (prds#145, #157): `internal/terra.Translate` rewrites the three Terraria messages that differ between the Wii U build (1.08) and the patched PS3 build (1.09), both directions: Hello (version 13 <-> 15), PlayerInfo (hair moves between the u16 and its own byte, three extra PS3 bytes) and InventorySlot (Wii U dye 59-61 <-> PS3 64-66, PS3 equipment slots without a Wii U peer are dropped). The other 82 message types pass through. Tests pin the Wii U bytes from the M3 Quay capture; the PS3 layout is from the static decompile (the extra PlayerInfo bytes and the armour/dye split are inferred), so it is not wired into the relay until a PS3 join capture confirms it. No change to `serve`. Also in this tag: the `rtsig`/`signalprobe` changes below (NpId probes, empty-query acks, type 3-5 decode), instrument-only.

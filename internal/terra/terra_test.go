@@ -27,6 +27,9 @@ func tr(t *testing.T, msg []byte, from, to Platform) []byte {
 }
 
 func TestHello(t *testing.T) {
+	if !bytes.Equal(Hello(WiiU, 1), h(capHello)) || !bytes.Equal(Hello(PS3, 1), h("010f01")) {
+		t.Fatal("Hello builder")
+	}
 	if got := tr(t, h(capHello), WiiU, PS3); !bytes.Equal(got, h("010f01")) {
 		t.Fatalf("wiiu->ps3 %x", got)
 	}

@@ -31,6 +31,14 @@ const (
 	ps3DyeFirst               = 64 // [I] armour[16] at 48..63, dye at 64..71
 )
 
+// Hello builds the client Hello [01][version][slot] for a platform's build.
+func Hello(p Platform, slot byte) []byte {
+	if p == PS3 {
+		return []byte{msgHello, helloVersionPS3, slot}
+	}
+	return []byte{msgHello, helloVersionWiiU, slot}
+}
+
 var ErrShort = errors.New("terra: short message")
 
 // Translate converts msg from one platform's layout to the other's. keep is false when the message has no peer on the
