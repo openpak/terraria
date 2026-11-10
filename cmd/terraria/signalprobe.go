@@ -96,28 +96,15 @@ func signalprobe() error {
 	var rc *rudp.Conn
 	p.OnProbe = func(c rtsig.Candidate) {
 		log.Printf("signalprobe: host candidate %s:%d, probing", c.Address, c.Port)
-		// Send our own type-1 probes to every host candidate: the host expects a probe from us
-		// before it answers (observed: it terminates after ~10s when none arrive).
+		// Send our own type-1 probes to every host candidate. The host probes us for 10 s (vsh state 7
+		// deadline) and sends terminate if no candidate got a valid type-2 back by then.
 		go func() {
-			pkt := rtsig.FrameSignal(p.ProbePacketFor())
-			if os.Getenv("TERRARIA_SIGNAL_PERMUTE") == "1" {
-				// Validator search: cycle every field-order variant at the local candidate.
-				go func() {
-					vs := p.ProbeVariants()
-					for i := 0; i < 30; i++ {
-						for _, t := range p.ProbeTargets() {
-							if t.Type != "local" {
-								continue
-							}
-							dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
-							for _, v := range vs {
-								udp.WriteToUDP(rtsig.FrameSignal(v), dst)
-							}
-						}
-						time.Sleep(300 * time.Millisecond)
-					}
-				}()
+			body, err := p.ProbePacketFor()
+			if err != nil {
+				log.Printf("signalprobe: probe: %v", err)
+				return
 			}
+			pkt := rtsig.FrameSignal(body)
 			if os.Getenv("TERRARIA_SIGNAL_SPRAY") == "1" {
 				// Find the host's real signaling port: spray the probe across its local address.
 				for _, t := range p.ProbeTargets() {
@@ -131,6 +118,10 @@ func signalprobe() error {
 				}
 			}
 			for i := 0; i < 40; i++ {
+				// Fresh send time per round: the host echoes it in its type-2 (RTT).
+				if body, err := p.ProbePacketFor(); err == nil {
+					pkt = rtsig.FrameSignal(body)
+				}
 				for _, t := range p.ProbeTargets() {
 					dst := &net.UDPAddr{IP: net.ParseIP(t.Address), Port: int(t.Port)}
 					if dst.IP == nil || dst.Port == 0 || dst.IP.IsUnspecified() {
@@ -178,11 +169,20 @@ func signalprobe() error {
 			if kind, sv, dv, body, err := rtsig.Unframe(pkt); err != nil {
 				log.Printf("signalprobe: UNFRAMED %d bytes from %s: %x", n, src, pkt)
 			} else if len(body) == 0x58 && body[0] <= 3 && dv == rtsig.VPortSignal {
-				log.Printf("signalprobe: probe %d bytes from %s kind=%d vport %#x->%#x type=%d %x", n, src, kind, sv, dv, body[0], body)
-				if resp := p.ProbeResponseFor(body); resp != nil {
+				if !p.FromHost(body) {
+					// Our own probe hairpinned back by the shared NAT (own NpId at +0x04): never answer it
+					// and never treat it as the host (2026-11-10: every "host probe" was one of these).
+					log.Printf("signalprobe: own probe reflected from %s type=%d (ignored)", src, body[0])
+					continue
+				}
+				log.Printf("signalprobe: HOST probe %d bytes from %s kind=%d vport %#x->%#x type=%d %x", n, src, kind, sv, dv, body[0], body)
+				if resp := p.ProbeResponseFor(body, src); resp != nil {
 					udp.WriteToUDP(rtsig.FrameSignal(resp), src)
 				}
-				if !probed && !src.IP.IsLoopback() {
+				if m := rtsig.ProbeMapped(body); m != nil {
+					log.Printf("signalprobe: host sees us at %s", m)
+				}
+				if !probed {
 					probed = true
 					go func() {
 						time.Sleep(200 * time.Millisecond)

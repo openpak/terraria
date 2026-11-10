@@ -6,7 +6,7 @@ import (
 )
 
 func TestFrameSignal(t *testing.T) {
-	p := ProbePacket(bytes.Repeat([]byte{1}, 16), bytes.Repeat([]byte{2}, 16), 1, 2)
+	p := ProbePacket(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), 1, 2, 3)
 	w := FrameSignal(p)
 	if !bytes.Equal(w[:6], []byte{0xff, 0x83, 0xff, 0xfe, 0xff, 0xfe}) || !bytes.Equal(w[6:], p) {
 		t.Fatalf("header % x", w[:6])

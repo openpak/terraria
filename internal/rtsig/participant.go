@@ -1,8 +1,8 @@
 package rtsig
 
 import (
-	"encoding/binary"
 	"fmt"
+	"net"
 	"strconv"
 	"time"
 )
@@ -75,29 +75,38 @@ func (p *Participant) ProbeOK() error {
 	return p.send(Accept(p.nextID(), p.HostJID, p.SelfJID, p.SID, p.peerSID, p.SKey, []Candidate{c}))
 }
 
-// ProbePacketFor builds the type-1 probe to send to the host (spec §7): it carries our skey,
-// the host's skey, our sid and the host's sid.
-func (p *Participant) ProbePacketFor() []byte {
-	return ProbePacket(p.SKey, p.peerKey, p.SID, p.peerSID)
+// NpIDs returns our and the host's NpIds in probe form, built from the JIDs of this RT exchange exactly
+// as the host's vsh builds them (its connection keys on the "to" JID of our offer and our stamped "from").
+func (p *Participant) NpIDs() (own, peer []byte, err error) {
+	if own, err = NpIDFromJID(p.SelfJID); err != nil {
+		return nil, nil, err
+	}
+	peer, err = NpIDFromJID(p.HostJID)
+	return own, peer, err
 }
 
-// ProbeResponseFor builds the type-2 answer to a host probe from this connection's fields.
-func (p *Participant) ProbeResponseFor(req []byte) []byte {
-	return ProbeResponsePacket(req, p.SKey, p.peerKey, p.SID, p.peerSID)
+// ProbePacketFor builds the type-1 probe to send to the host.
+func (p *Participant) ProbePacketFor() ([]byte, error) {
+	own, peer, err := p.NpIDs()
+	if err != nil {
+		return nil, err
+	}
+	return ProbePacket(own, peer, p.SID, p.peerSID, uint64(time.Now().UnixMicro())), nil
 }
 
-// ProbeVariants returns the probe packet in every plausible field order (live validator search):
-// skey order × sid order, plus one carrying a current timestamp at +0x48 like the builder writes.
-func (p *Participant) ProbeVariants() [][]byte {
-	base := ProbePacket(p.SKey, p.peerKey, p.SID, p.peerSID)
-	swapKeys := ProbePacket(p.peerKey, p.SKey, p.SID, p.peerSID)
-	swapSIDs := ProbePacket(p.SKey, p.peerKey, p.peerSID, p.SID)
-	swapBoth := ProbePacket(p.peerKey, p.SKey, p.peerSID, p.SID)
-	stamped := append([]byte(nil), base...)
-	now := uint64(time.Now().UnixMilli())
-	binary.BigEndian.PutUint32(stamped[0x48:], uint32(now>>32))
-	binary.BigEndian.PutUint32(stamped[0x4c:], uint32(now))
-	return [][]byte{base, swapKeys, swapSIDs, swapBoth, stamped}
+// ProbeResponseFor answers a host type-1 probe received from src; nil if it is not one.
+func (p *Participant) ProbeResponseFor(req []byte, src *net.UDPAddr) []byte {
+	own, peer, err := p.NpIDs()
+	if err != nil || !ProbeFrom(req, own, peer) {
+		return nil
+	}
+	return ProbeResponsePacket(req, src, own, peer, p.SID, p.peerSID)
+}
+
+// FromHost reports whether body is a genuine host probe (not our own, hairpinned back).
+func (p *Participant) FromHost(body []byte) bool {
+	own, peer, err := p.NpIDs()
+	return err == nil && ProbeFrom(body, own, peer)
 }
 
 // ProbeTargets returns every candidate the host offered.
