@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.14 - 2026-11-11
+
+- `rtsig` (prds#145, research §42): an iq `error` (the peer refusing one of our sets, vsh code in `<x code=..>`, `Stanza.ErrCode`) is reported
+  through `Participant.OnReject` and never acked or parsed as a fresh offer/accept. On run mc3 the PS3's echoed rejection of our offer was
+  taken as its offer and the probe probed its own address 158 times.
+- `rtsig`: `Participant.SetHostNpID` / `JIDFromNpID` address the console by the JID of its own NpId (`PS3Test`+`ptnpps3` ->
+  `PS3Test@pt.np.np.playstation.net/ps3`) and pin it against np-community's stamped `from` (the console's stream domain `pt.pt`). The
+  PS3 rejected mc3's offer with 0x8002a80e because `pt.pt` maps to `ptptps3` and the connection its Matching2 activated holds `ptnpps3`.
+- Tests replay the console-initiated mc3 exchange and the probe-initiated mc2 one stanza for stanza (`signal_replay_test.go`).
+- Synced with the minecraft copy (`PeerSKey`, `HostCandidate`). `signalprobe` itself is unchanged.
+
 ## v0.2.13 - 2026-11-10
 
 `signalprobe`: the joiner Hello sent on RUDP ESTABLISHED carries version 15 (patched PS3 NPEB01270 v01.12, decompile `cmpwi 15`) instead of 1 (the v01.00 disc build), so a real PS3 host does not kick the probe with "not the same version". `terra.Hello` builds it.
