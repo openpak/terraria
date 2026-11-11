@@ -133,3 +133,36 @@ func TestEchoReply(t *testing.T) {
 		t.Fatal("echo of non-request")
 	}
 }
+
+// Live run 7 2026-11-11 13:16:46 (card #145), real PS3 on Evilnat 4.93: the first host type-1 probe (framed, from 10.87.0.11:3658) and the
+// reply our probe put on the wire (testdata/live7-probe.txt, both read from live7.pcap). The PS3 accepted it: it went to ESTABLISHED (type-3
+// pairs) and answered every later type-1 of ours with a type 2. The missing `activated` was never a UDP problem: the PS3's game never
+// referenced the connection (§36), so these bytes must not change.
+func TestLive7HostProbeReply(t *testing.T) {
+	raw, err := os.ReadFile("testdata/live7-probe.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := map[string][]byte{}
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		k, v, _ := strings.Cut(l, " ")
+		if cap[k], err = hex.DecodeString(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, _, req, err := Unframe(cap["host-type1"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Participant{SID: 23244, peerSID: 59541, SelfJID: "SwitchTest@gb.gb.np.playstation.net/ps3", HostJID: "PS3Test@pt.pt.np.playstation.net/ps3"}
+	if !p.FromHost(req) {
+		t.Fatal("captured host probe not recognised")
+	}
+	src := &net.UDPAddr{IP: net.IPv4(10, 87, 0, 11), Port: 3658}
+	if got := FrameSignal(p.ProbeResponseFor(req, src)); !bytes.Equal(got, cap["our-reply"]) {
+		t.Fatalf("reply\n got %x\nwant %x", got, cap["our-reply"])
+	}
+	if m := ProbeMapped(cap["our-reply"][6:]); m == nil || m.String() != "10.87.0.11:3658" {
+		t.Fatalf("mapped %v", m)
+	}
+}
