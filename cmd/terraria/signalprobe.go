@@ -150,7 +150,13 @@ func signalprobe() error {
 		binary.Read(rand.Reader, binary.BigEndian, &isn)
 		binary.Read(rand.Reader, binary.BigEndian, &cid)
 		rc = rudp.New(udp, &net.UDPAddr{IP: net.ParseIP(c.Address), Port: int(c.Port)}, isn, cid)
+		// Every segment in both directions (type, flags, seq/ack, payload hex) and every datagram problem; nothing here aborts the probe.
+		rc.Trace = func(dir, desc string, _ []byte) { log.Printf("signalprobe: RUDP %s %s", dir, desc) }
+		rc.OnReset = func(reason byte, id uint32) {
+			log.Printf("signalprobe: RUDP RESET by the host, reason %d connid %#08x (3 = its connect timeout)", reason, id)
+		}
 		rc.OnPayload = func(b []byte) { log.Printf("signalprobe: game payload %d bytes: %x", len(b), b) }
+		go rc.RunTimers() // SYN / SYN+ACK back-off 1,2,4,8,16 s, data retransmit, keepalive ack
 		rc.OnEstablished = func() {
 			log.Printf("signalprobe: RUDP ESTABLISHED, sending Terraria Hello")
 			if err := rc.Send(terra.Hello(terra.PS3, 1)); err != nil { // version 15 on NPEB01270 v01.12 (decompile); the old 1 was the v01.00 disc build
@@ -215,8 +221,8 @@ func signalprobe() error {
 				continue
 			}
 			log.Printf("signalprobe: udp %d bytes from %s: %x", n, src, pkt)
-			// ponytail: RUDP framing on the game socket (kind/vports) is unrecorded; the raw datagram is
-			// handed to rudp as before until a live capture shows it.
+			// RUDP on the game socket is UDPP2P kind 3, vports 1 -> 1, then a class-2 frame to RUDP port 1 (live10, 2026-11-13);
+			// rudp strips the header itself.
 			if rc != nil {
 				if err := rc.HandleDatagram(pkt); err != nil {
 					log.Printf("signalprobe: rudp: %v", err)

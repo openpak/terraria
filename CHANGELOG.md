@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.16 - 2026-11-13
+
+- `rudp` rebuilt on the first RUDP packets ever captured from a real PS3 (run live10, a Terraria host: its SYN and its reset; research
+  matching2 note §43, decoded against librudp.prx). Why the probe never answered: it parsed the datagram without removing the UDPP2P header
+  (`rudp: bad frame length 1987`) and its own SYN was a class-1, unframed frame that the console's muxmode-1 context and the kernel both drop.
+- Wire layout now: UDPP2P `ff c3 01 01` (kind 3, vports 1/1), class-2 aggregator frame to RUDP port 1, window byte 0x30, SYN block cap word
+  0x0201 (mirrored from the console's own SYN: librudp aborts silently unless the peer's cap bits equal its flags), versions 0x0100/0x0100,
+  connection id, MSS 0x582. A SYN is answered with a SYN+ACK (ack = its ISN+1), a SYN+ACK with the empty ack that completes the peer's
+  SYN-RECEIVED, a data packet with the ack flag completes ours. SYN and SYN+ACK retransmit 1, 2, 4, 8, 16 s (as the console does); received
+  data is acked and de-duplicated; unacked data is retransmitted after 1 s; an empty ack goes out every 5 s when idle.
+- The console's RESET (type 3, reason u16, its own connection id; reason 3 = its 30 s connect timeout) is recorded and reported, never an error.
+  Bad frames, wrong RUDP ports, refused version words, kernel unreachable replies are traced and skipped; nothing aborts the probe.
+- `signalprobe` logs every segment in both directions (`RUDP rx|tx <type> flags win seq ack payload(hex)`) and runs the retransmit timers;
+  the host's data still reaches the existing `game payload` line after the Hello (version 15).
+- Tests replay the two captured datagrams: the reply to the console's SYN is asserted byte for byte (`ff c3 01 01 80 16 00 01 a0 30 10 00 3d 4d 02 01
+  01 00 01 00 <connid> 05 82`), the reset is recorded without an answer, plus the back-off schedule, bad-input cases and a loopback simultaneous open.
+
 ## v0.2.15 - 2026-11-13
 
 - `signalprobe` (prds#145): an explicit `TERRARIA_SIGNAL_HOST_JID` is pinned, so a console-initiated offer no longer replaces it with
