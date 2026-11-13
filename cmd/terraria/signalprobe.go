@@ -73,6 +73,13 @@ func signalprobe() error {
 		HostJID: envOr("TERRARIA_SIGNAL_HOST_JID", host+"@"+domain+"/ps3"),
 		SelfJID: cl.JID,
 	}
+	// An explicit host JID is the console's own NpId (run 2026-11-11 mc3: np-community stamps the stream domain on a forwarded
+	// "from", which is a different NpId, and the console rejects an offer addressed to that one), so a host offer must not replace it.
+	if j := os.Getenv("TERRARIA_SIGNAL_HOST_JID"); j != "" {
+		if id, err := rtsig.NpIDFromJID(j); err == nil {
+			p.SetHostNpID(id)
+		}
+	}
 	// Mirror the host's offer shape: stun, static and (when known) local candidates, so the host's
 	// candidate selection finds a pair it will actually probe.
 	p.OfferCandidates = []rtsig.Candidate{

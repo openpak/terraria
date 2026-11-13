@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.15 - 2026-11-13
+
+- `signalprobe` (prds#145): an explicit `TERRARIA_SIGNAL_HOST_JID` is pinned, so a console-initiated offer no longer replaces it with
+  np-community's stamped `from` (the wrong NpId, rejected by the console).
+
 ## v0.2.14 - 2026-11-11
 
 - `rtsig` (prds#145, research §42): an iq `error` (the peer refusing one of our sets, vsh code in `<x code=..>`, `Stanza.ErrCode`) is reported
